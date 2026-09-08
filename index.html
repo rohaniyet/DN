@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DN Manager</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230b6b5b'/><text x='16' y='22' font-family='Arial' font-size='15' font-weight='bold' fill='%23fff' text-anchor='middle'>DN</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<div id="loginScreen" class="login-wrap" hidden>
+  <form id="loginForm" class="login-card">
+    <div class="brand"><span class="brand-mark">DN</span><div><h1>DN Manager</h1><p>Debit note &amp; Annex-I workbench</p></div></div>
+    <label>Email<input type="email" id="liEmail" autocomplete="username" required></label>
+    <label>Password<input type="password" id="liPass" autocomplete="current-password" required minlength="6"></label>
+    <div id="loginMsg" class="msg" hidden></div>
+    <button class="btn primary block" id="liBtn" type="submit">Sign in</button>
+    <p class="login-alt">First time? <a href="#" id="liSignup">Create your account</a></p>
+  </form>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="appShell" hidden>
+  <header class="topbar">
+    <div class="brand small"><span class="brand-mark">DN</span><b>DN Manager</b></div>
+    <nav id="mainNav">
+      <a data-route="dashboard">Dashboard</a>
+      <a data-route="notes">Debit Notes</a>
+      <a data-route="annexi">Annex-I</a>
+      <a data-route="master">Purchase Master</a>
+      <a data-route="suppliers">Suppliers</a>
+      <a data-route="analytics">Analytics</a>
+      <a data-route="settings">Settings</a>
+    </nav>
+    <div class="topbar-right">
+      <span id="whoami" class="who"></span>
+      <button class="btn ghost sm" id="btnLogout">Sign out</button>
+    </div>
+  </header>
+
+  <main id="view"></main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<div id="modal" class="modal" hidden><div class="modal-box" id="modalBox"></div></div>
+<div id="printArea" class="print-area"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<script src="config.js"></script>
+<script src="lib.js"></script>
+<script src="db.js"></script>
+<script src="suppliers.js"></script>
+<script src="master.js"></script>
+<script src="notes.js"></script>
+<script src="printing.js"></script>
+<script src="annexi.js"></script>
+<script src="analytics.js"></script>
+<script src="settings.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
