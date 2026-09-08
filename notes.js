@@ -29,7 +29,7 @@
       '<div class="card" style="padding:0"><div class="tbl-wrap"><table><thead><tr>' +
       '<th style="width:34px"><input type="checkbox" id="nAll"></th>' +
       "<th>DN No.</th><th>Date</th><th>Supplier</th><th>Invoice(s)</th><th>Reason</th>" +
-      '<th class="num">Value excl.</th><th class="num">Sales tax</th><th>Status</th><th style="width:210px"></th>' +
+      '<th class="num">Value excl.</th><th class="num">Sales tax</th><th class="num">Total</th><th>Status</th><th style="width:210px"></th>' +
       '</tr></thead><tbody id="nBody"></tbody></table></div></div>';
 
     function filtered() {
@@ -49,8 +49,9 @@
     function paint() {
       const rows = filtered();
       const v = rows.reduce((a, n) => a + total(n), 0), s = rows.reduce((a, n) => a + tax(n), 0);
-      D.$("#nSum").innerHTML = "<b>" + rows.length + "</b> notes &nbsp;·&nbsp; value <b>" +
-        D.money(v) + "</b> &nbsp;·&nbsp; sales tax <b>" + D.money(s) + "</b>";
+      D.$("#nSum").innerHTML = "<b>" + rows.length + "</b> notes &nbsp;·&nbsp; excl. tax <b>" +
+        D.money(v) + "</b> &nbsp;·&nbsp; sales tax <b>" + D.money(s) +
+        "</b> &nbsp;·&nbsp; total <b>" + D.money(v + s) + "</b>";
       D.$("#nBody").innerHTML = rows.length ? rows.map(n => {
         const invs = D.uniqBy(n.items || [], i => i.invoice_no).map(i => i.invoice_no).filter(Boolean);
         return '<tr class="' + (n.status === "cancelled" ? "cancelled" : "") + '">' +
@@ -60,12 +61,13 @@
           '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + D.esc(invs.join(", ")) + '">' + D.esc(invs.join(", ")) + "</td>" +
           "<td>" + D.esc(n.reason === "Other" ? (n.reason_note || "Other") : (n.reason || "")) + "</td>" +
           '<td class="num">' + D.money(total(n)) + '</td><td class="num">' + D.money(tax(n)) + "</td>" +
+          '<td class="num"><b>' + D.money(total(n) + tax(n)) + "</b></td>" +
           "<td>" + tag(n.status) + (n.filed_period ? '<div class="n" style="font-size:11px;color:#516475">' + D.periodLabel(n.filed_period) + "</div>" : "") + "</td>" +
           '<td><button class="btn sm" data-edit="' + n.id + '">Edit</button> ' +
           '<button class="btn sm" data-print="' + n.id + '">Print</button> ' +
           '<button class="btn sm" data-pdf="' + n.id + '">PDF</button> ' +
           '<button class="btn sm danger" data-cancel="' + n.id + '">' + (n.status === "filed" || n.status === "cancelled" ? "Cancel" : "Delete") + "</button></td></tr>";
-      }).join("") : '<tr><td colspan="10" class="empty">No debit notes match.</td></tr>';
+      }).join("") : '<tr><td colspan="11" class="empty">No debit notes match.</td></tr>';
 
       D.$$("[data-edit]", view).forEach(b => b.onclick = () => D.go("note", b.dataset.edit));
       D.$$("[data-print]", view).forEach(b => b.onclick = async () => {

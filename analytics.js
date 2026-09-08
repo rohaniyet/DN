@@ -39,33 +39,40 @@
     const thisPeriod = D.period();
     const thisMonth = live.filter(n => D.period(n.dn_date) === thisPeriod);
 
+    const filed = live.filter(n => n.status === "filed");
+    const money3 = (set) => {
+      const v = set.reduce((a, n) => a + noteValue(n), 0);
+      const t = set.reduce((a, n) => a + noteTax(n), 0);
+      return '<div class="n">Excl. <b>' + D.money(v, 0) + "</b></div>" +
+             '<div class="n">GST <b>' + D.money(t, 0) + "</b> &nbsp;·&nbsp; Total <b>" + D.money(v + t, 0) + "</b></div>";
+    };
+
     view.innerHTML =
       '<div class="page-head"><h1>Dashboard</h1><div class="spacer"></div>' +
       '<button class="btn" id="qMaster">Import purchase master</button>' +
       '<button class="btn primary" id="qNew">New debit note</button></div>' +
 
       '<div class="grid g4" style="margin-bottom:16px">' +
-      '<div class="stat"><div class="k">This month</div><div class="v">' + thisMonth.length + "</div>" +
-      '<div class="n">' + D.money(thisMonth.reduce((a, n) => a + noteValue(n), 0), 0) + " excl. tax</div></div>" +
-      '<div class="stat b3"><div class="k">Open (not filed)</div><div class="v">' + open.length + "</div>" +
-      '<div class="n">' + D.money(open.reduce((a, n) => a + noteValue(n), 0), 0) + " to be claimed</div></div>" +
-      '<div class="stat b4"><div class="k">Filed to date</div><div class="v">' + live.filter(n => n.status === "filed").length + "</div>" +
-      '<div class="n">' + D.money(live.filter(n => n.status === "filed").reduce((a, n) => a + noteValue(n), 0), 0) + "</div></div>" +
+      '<div class="stat"><div class="k">This month</div><div class="v">' + thisMonth.length + "</div>" + money3(thisMonth) + "</div>" +
+      '<div class="stat b3"><div class="k">Open (not filed)</div><div class="v">' + open.length + "</div>" + money3(open) + "</div>" +
+      '<div class="stat b4"><div class="k">Filed to date</div><div class="v">' + filed.length + "</div>" + money3(filed) + "</div>" +
       '<div class="stat b2"><div class="k">Purchase master</div><div class="v">' + master.total.toLocaleString("en-PK") + "</div>" +
-      '<div class="n">' + master.periods.length + " periods loaded</div></div></div>" +
+      '<div class="n">invoice parts</div><div class="n">' + master.periods.length + " periods loaded</div></div></div>" +
 
       '<div class="grid g2">' +
-      '<div class="card"><h2>Debit note value by month</h2><div style="height:270px"><canvas id="cMonth"></canvas></div></div>' +
-      '<div class="card"><h2>Open notes by supplier</h2><div style="height:270px"><canvas id="cOpen"></canvas></div></div>' +
+      '<div class="card"><h2>Debit note value by month <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2><div style="height:270px"><canvas id="cMonth"></canvas></div></div>' +
+      '<div class="card"><h2>Open notes by supplier <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2><div style="height:270px"><canvas id="cOpen"></canvas></div></div>' +
       "</div>" +
 
       '<div class="card"><h2>Latest debit notes</h2><div class="tbl-wrap" style="max-height:40vh"><table><thead><tr>' +
       "<th>DN No.</th><th>Date</th><th>Supplier</th><th>Reason</th>" +
-      '<th class="num">Value</th><th>Status</th></tr></thead><tbody>' +
+      '<th class="num">Excl. tax</th><th class="num">Sales tax</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>' +
       (live.slice(0, 12).map(n => "<tr><td><b>" + D.esc(n.dn_no) + "</b></td><td>" + D.dmy(n.dn_date) + "</td>" +
         "<td>" + D.esc(n.supplier_name || "") + "</td><td>" + D.esc(n.reason || "") + "</td>" +
-        '<td class="num">' + D.money(noteValue(n)) + '</td><td><span class="tag ' + n.status + '">' + n.status + "</span></td></tr>").join("") ||
-        '<tr><td colspan="6" class="empty">No debit notes yet.</td></tr>') +
+        '<td class="num">' + D.money(noteValue(n)) + '</td><td class="num">' + D.money(noteTax(n)) + "</td>" +
+        '<td class="num"><b>' + D.money(noteValue(n) + noteTax(n)) + '</b></td>' +
+        '<td><span class="tag ' + n.status + '">' + n.status + "</span></td></tr>").join("") ||
+        '<tr><td colspan="8" class="empty">No debit notes yet.</td></tr>') +
       "</tbody></table></div></div>";
 
     D.$("#qNew").onclick = () => D.go("note", "new");
@@ -117,20 +124,21 @@
     const bySupplier = {};
     notes.forEach(n => {
       const k = n.supplier_name || "(no supplier)";
-      bySupplier[k] = bySupplier[k] || { name: k, count: 0, value: 0 };
-      bySupplier[k].count++; bySupplier[k].value += noteValue(n);
+      bySupplier[k] = bySupplier[k] || { name: k, count: 0, value: 0, tax: 0 };
+      bySupplier[k].count++; bySupplier[k].value += noteValue(n); bySupplier[k].tax += noteTax(n);
     });
     const suppliers = Object.values(bySupplier).sort((a, b) => b.value - a.value);
 
     const byReason = {};
     notes.forEach(n => {
       const k = n.reason || "(not set)";
-      byReason[k] = byReason[k] || { name: k, count: 0, value: 0 };
-      byReason[k].count++; byReason[k].value += noteValue(n);
+      byReason[k] = byReason[k] || { name: k, count: 0, value: 0, tax: 0 };
+      byReason[k].count++; byReason[k].value += noteValue(n); byReason[k].tax += noteTax(n);
     });
     const reasons = Object.values(byReason).sort((a, b) => b.value - a.value);
 
     const totalValue = notes.reduce((a, n) => a + noteValue(n), 0);
+    const totalTax = notes.reduce((a, n) => a + noteTax(n), 0);
     const totalPurch = Object.values(purchByPeriod).reduce((a, b) => a + b, 0);
 
     view.innerHTML =
@@ -139,8 +147,10 @@
       '<div class="grid g4" style="margin-bottom:16px">' +
       '<div class="stat"><div class="k">Debit notes</div><div class="v">' + notes.length + "</div>" +
       '<div class="n">' + periods.length + " months</div></div>" +
-      '<div class="stat b2"><div class="k">Total value excl. tax</div><div class="v">' + D.money(totalValue, 0) + "</div></div>" +
-      '<div class="stat b4"><div class="k">Sales tax reversed</div><div class="v">' + D.money(notes.reduce((a, n) => a + noteTax(n), 0), 0) + "</div></div>" +
+      '<div class="stat b2"><div class="k">Value excl. sales tax</div><div class="v">' + D.money(totalValue, 0) + "</div>" +
+      '<div class="n">Total with GST <b>' + D.money(totalValue + totalTax, 0) + "</b></div></div>" +
+      '<div class="stat b4"><div class="k">Sales tax reversed</div><div class="v">' + D.money(totalTax, 0) + "</div>" +
+      '<div class="n">' + (totalValue ? (totalTax / totalValue * 100).toFixed(1) : "0") + "% of the ex-tax value</div></div>" +
       '<div class="stat b3"><div class="k">Share of purchases</div><div class="v">' +
         (totalPurch ? (totalValue / totalPurch * 100).toFixed(2) + "%" : "—") + "</div>" +
       '<div class="n">of ' + D.money(totalPurch, 0) + " purchased</div></div></div>" +
@@ -154,21 +164,23 @@
 
       '<div class="card"><h2>Month by month</h2><div class="tbl-wrap" style="max-height:40vh"><table><thead><tr>' +
       '<th>Month</th><th class="num">Notes</th><th class="num">Value excl. tax</th><th class="num">Sales tax</th>' +
-      '<th class="num">Purchases</th><th class="num">DN as % of purchases</th></tr></thead><tbody>' +
+      '<th class="num">Total with GST</th><th class="num">Purchases</th><th class="num">DN as % of purchases</th></tr></thead><tbody>' +
       (rows.slice().reverse().map(r => "<tr><td><b>" + D.periodLabel(r.period) + '</b></td><td class="num">' + r.count + "</td>" +
         '<td class="num">' + D.money(r.value) + '</td><td class="num">' + D.money(r.tax) + "</td>" +
+        '<td class="num"><b>' + D.money(r.value + r.tax) + "</b></td>" +
         '<td class="num">' + (r.purchases ? D.money(r.purchases) : "—") + '</td>' +
         '<td class="num">' + (r.share === null ? "—" : r.share.toFixed(2) + "%") + "</td></tr>").join("") ||
-        '<tr><td colspan="6" class="empty">No data yet.</td></tr>') +
+        '<tr><td colspan="7" class="empty">No data yet.</td></tr>') +
       "</tbody></table></div></div>" +
 
       '<div class="card"><h2>Supplier ranking</h2><div class="tbl-wrap" style="max-height:44vh"><table><thead><tr>' +
       '<th style="width:44px">#</th><th>Supplier</th><th class="num">Notes</th><th class="num">Value excl. tax</th>' +
-      '<th class="num">Share</th></tr></thead><tbody>' +
+      '<th class="num">Sales tax</th><th class="num">Total with GST</th><th class="num">Share</th></tr></thead><tbody>' +
       (suppliers.map((s, i) => "<tr><td>" + (i + 1) + "</td><td>" + D.esc(s.name) + '</td><td class="num">' + s.count + "</td>" +
-        '<td class="num">' + D.money(s.value) + '</td><td class="num">' +
+        '<td class="num">' + D.money(s.value) + '</td><td class="num">' + D.money(s.tax) + "</td>" +
+        '<td class="num"><b>' + D.money(s.value + s.tax) + '</b></td><td class="num">' +
         (totalValue ? (s.value / totalValue * 100).toFixed(1) + "%" : "—") + "</td></tr>").join("") ||
-        '<tr><td colspan="5" class="empty">No data yet.</td></tr>') +
+        '<tr><td colspan="7" class="empty">No data yet.</td></tr>') +
       "</tbody></table></div></div>";
 
     const money = v => "Rs. " + D.money(v);
@@ -214,14 +226,17 @@
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(r => ({
         Month: D.periodLabel(r.period), Notes: r.count, "Value excl. tax": D.round2(r.value),
-        "Sales tax": D.round2(r.tax), Purchases: D.round2(r.purchases),
+        "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax),
+        Purchases: D.round2(r.purchases),
         "DN % of purchases": r.share === null ? "" : D.round2(r.share)
       }))), "By month");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(suppliers.map((s, i) => ({
-        Rank: i + 1, Supplier: s.name, Notes: s.count, "Value excl. tax": D.round2(s.value)
+        Rank: i + 1, Supplier: s.name, Notes: s.count, "Value excl. tax": D.round2(s.value),
+        "Sales tax": D.round2(s.tax), "Total with GST": D.round2(s.value + s.tax)
       }))), "By supplier");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reasons.map(r => ({
-        Reason: r.name, Notes: r.count, "Value excl. tax": D.round2(r.value)
+        Reason: r.name, Notes: r.count, "Value excl. tax": D.round2(r.value),
+        "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax)
       }))), "By reason");
       XLSX.writeFile(wb, "DN analytics " + D.today() + ".xlsx");
     };
