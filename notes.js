@@ -398,6 +398,8 @@
         const groups = new Map(); let lastNo = "";
         parsed.rows.forEach(row => {
           let no = String(g(row, "dn_no") || "").trim();
+          /* a stray header row (its DN cell repeats the column name) is not a note */
+          if (no && D.norm(no) === D.norm(parsed.map.dn_no)) return;
           if (!no) no = lastNo; else lastNo = no;
           if (!no) return;
           const raw = String(g(row, "reason") || "");
