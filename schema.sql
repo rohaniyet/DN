@@ -136,6 +136,9 @@ create table if not exists annexi_lines (
   status         text default 'ready',   -- ready | pending
   pending_reason text
 );
+alter table annexi_lines add column if not exists orig_qty   numeric(18,4) default 0;
+alter table annexi_lines add column if not exists orig_value numeric(18,2) default 0;
+
 create index if not exists al_run_ix on annexi_lines (run_id);
 create index if not exists al_ref_ix on annexi_lines (inv_ref_no);
 create index if not exists al_dn_ix  on annexi_lines (dn_id);

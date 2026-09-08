@@ -76,6 +76,11 @@ window.DN = window.DN || {};
     if (p.length !== 3) return s;
     return p[2] + "-" + MON[+p[1] - 1] + "-" + p[0].slice(2);
   };
+  D.dmyNum = (d) => {            /* 05-05-2026 - the form used in the IRIS sample table */
+    if (!d) return "";
+    const p = String(d).slice(0, 10).split("-");
+    return p.length === 3 ? p[2] + "-" + p[1] + "-" + p[0] : String(d);
+  };
   /* Excel serial / free text -> yyyy-mm-dd */
   D.toDate = (v) => {
     if (v === null || v === undefined || v === "") return null;

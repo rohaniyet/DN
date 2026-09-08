@@ -11,8 +11,8 @@
       '<div class="page-head"><h1>Settings</h1></div>' +
 
       '<div class="card"><h2>Annex-I upload template</h2>' +
-      '<div class="sub">Upload your IRIS “sample table” once — the app copies its exact column headings and uses them for every Annex-I export. ' +
-      "Then check that each heading points at the right field.</div>" +
+      '<div class="sub">The export already matches your IRIS sample table — 24 columns with the Debit Note / Original Invoice / Revised Invoice groups. ' +
+      "Upload a different template here only if FBR changes the layout; the app copies its exact headings and you point each one at a field.</div>" +
       '<label class="f" style="max-width:420px">Sample table (Excel)<input type="file" id="tFile" accept=".xlsx,.xls,.csv"></label>' +
       '<div id="tMap" style="margin-top:14px"></div>' +
       '<div class="row" style="margin-top:12px"><button class="btn primary" id="tSave">Save template</button>' +
@@ -49,10 +49,12 @@
     let draft = cols.slice();
     function drawMap() {
       D.$("#tMap").innerHTML = '<div class="grid g3">' + draft.map((c, i) =>
-        '<label class="f">' + D.esc(c.head) +
+        '<label class="f">' + (c.group ? D.esc(c.group) + " &rsaquo; " : "") + D.esc(c.head) +
         '<select data-col="' + i + '">' +
-        D.ANNEXI_DEFAULT_COLS.map(f => '<option value="' + f.key + '"' + (f.key === c.key ? " selected" : "") + ">" + D.esc(f.head) + "</option>").join("") +
-        '<option value=""' + (c.key ? "" : " selected") + ">— leave blank —</option></select></label>").join("") + "</div>";
+        '<option value=""' + (c.key ? "" : " selected") + ">— leave blank —</option>" +
+        D.ANNEXI_DEFAULT_COLS.map(f => '<option value="' + f.key + '"' + (f.key === c.key ? " selected" : "") +
+          ">" + D.esc((f.group ? f.group + " > " : "") + f.head) + "</option>").join("") +
+        "</select></label>").join("") + "</div>";
       D.$$("[data-col]").forEach(s => s.onchange = () => draft[+s.dataset.col].key = s.value);
     }
     drawMap();
@@ -63,26 +65,58 @@
         const sheets = await D.readSheet(file);
         const sh = sheets.find(s => s.aoa.length) || sheets[0];
         const hdrIdx = D.headerRowIndex(sh.aoa);
-        const heads = (sh.aoa[hdrIdx] || []).map(h => String(h).trim()).filter(Boolean);
-        if (!heads.length) return D.toast("No headings found in that file", "err");
-        draft = heads.map(h => ({ head: h, key: guessKey(h) }));
+        const headRow = sh.aoa[hdrIdx] || [];
+        const above = hdrIdx > 0 ? (sh.aoa[hdrIdx - 1] || []) : [];
+        /* the row above is a group row when it labels blocks rather than every column */
+        const aboveFilled = above.filter(c => String(c).trim() !== "").length;
+        const isGrouped = aboveFilled > 0 && aboveFilled < headRow.filter(c => String(c).trim() !== "").length;
+        const groups = [];
+        let carry = "";
+        for (let i = 0; i < headRow.length; i++) {
+          if (isGrouped && String(above[i] || "").trim()) carry = String(above[i]).trim();
+          groups[i] = isGrouped ? carry : "";
+        }
+        const out = [];
+        for (let i = 0; i < headRow.length; i++) {
+          const h = String(headRow[i] === undefined ? "" : headRow[i]);
+          if (!h.trim()) continue;
+          out.push({ head: h, group: groups[i] || "", key: guessKey(groups[i] || "", h), fmt: fmtFor(guessKey(groups[i] || "", h)) });
+        }
+        if (!out.length) return D.toast("No headings found in that file", "err");
+        draft = out;
         drawMap();
-        D.toast(heads.length + " headings read — check the mapping, then Save template");
+        D.toast(out.length + " headings read — check the mapping, then Save template");
       } catch (err) { D.toast(err.message, "err"); }
     };
-    function guessKey(head) {
-      const f = D.ANNEXI_DEFAULT_COLS.find(x => D.norm(x.head) === D.norm(head));
-      if (f) return f.key;
+    function fmtFor(key) {
+      const f = D.ANNEXI_DEFAULT_COLS.find(x => x.key === key);
+      return f ? f.fmt : undefined;
+    }
+    function guessKey(group, head) {
+      const exact = D.ANNEXI_DEFAULT_COLS.find(x => D.norm(x.group) === D.norm(group) && D.norm(x.head) === D.norm(head));
+      if (exact) return exact.key;
+      const g = D.norm(group), h = D.norm(head);
+      const inDn = g.includes("DEBITNOTE") || g.includes("DRNOTE");
+      const inOrig = g.includes("ORIGINAL");
+      const inRev = g.includes("REVISED");
+      if (h.includes("QNTY") || h.includes("QUANTITY") || h === "QTY")
+        return inRev ? "rev_qty" : inOrig ? "orig_qty" : "dn_qty";
+      if (h.includes("EXVALUE") || h.includes("VALUEEXCL") || h.includes("TAXABLE"))
+        return inRev ? "rev_value" : inOrig ? "orig_value" : "dn_value";
+      if (h.includes("STAX") || h.includes("SALESTAX"))
+        return inRev ? "rev_tax" : inOrig ? "orig_tax" : "dn_tax";
+      if (h.includes("TOTAL"))
+        return inRev ? "rev_total" : inOrig ? "orig_total" : "dn_total";
+      if (h === "DATE") return inOrig ? "invoice_date" : "dn_date";
       const syn = {
         supplier_name: ["supplier", "seller", "name"], supplier_ntn: ["ntn", "cnic", "registration"],
-        purchase_type: ["purchase type", "sale type", "type"], tax_rate: ["rate"],
-        hs_code: ["hs"], inv_ref_no: ["ref"], dn_no_display: ["debit note no", "dr note", "note no", "credit note no"],
-        dn_date: ["debit note date", "dr note date", "note date"], invoice_no: ["invoice no", "original invoice", "document no"],
-        invoice_date: ["invoice date", "doc date"], uom: ["uom", "unit"], quantity: ["quantity", "qty"],
-        value_excl: ["value", "taxable"], sales_tax: ["sales tax", "st amount"], reason: ["reason", "remark"]
+        purchase_type: ["purchasetype", "saletype", "type"], rate_ratio: ["rate"],
+        hs_code: ["hs"], inv_ref_no: ["ref"],
+        dn_no_display: ["drnoteno", "debitnoteno", "noteno", "creditnoteno"],
+        invoice_no: ["originalinvoice", "invoiceno", "documentno"],
+        uom: ["uom", "unit"], reason: ["reason", "remark"]
       };
-      const h = D.norm(head);
-      for (const k in syn) if (syn[k].some(s => h.includes(D.norm(s)))) return k;
+      for (const k in syn) if (syn[k].some(x => h.includes(D.norm(x)))) return k;
       return "";
     }
     D.$("#tSave").onclick = async () => {
