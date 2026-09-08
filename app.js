@@ -68,7 +68,8 @@
     startApp(data.session);
   });
 
-  D.$("#liSignup").addEventListener("click", async (e) => {
+  const signupLink = D.$("#liSignup");
+  if (signupLink) signupLink.addEventListener("click", async (e) => {
     e.preventDefault();
     const email = D.$("#liEmail").value.trim(), password = D.$("#liPass").value;
     if (!email || password.length < 6) return showLogin("Enter your email and a password of at least 6 characters, then click again.", "warn");
