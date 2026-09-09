@@ -1,4 +1,6 @@
-/* ===== DN Manager - printable debit note, PDF and bulk ZIP ====== */
+/* ===== DN Manager - printable debit note, PDF and bulk ZIP ======
+   Layout follows the company's own debit-note stationery exactly.
+   ================================================================ */
 (function (D) {
   "use strict";
   const CO = window.DN_CONFIG.COMPANY;
@@ -9,48 +11,83 @@
     const tax = items.reduce((a, i) => a + D.num(i.sales_tax), 0);
     const tot = val + tax;
     const reason = n.reason === "Other" ? (n.reason_note || "Other") : (n.reason || n.reason_note || "");
+    const reasonLine = [reason, n.gate_pass_no ? "GP " + n.gate_pass_no : ""].filter(Boolean).join(" ");
+    const fbr = String(n.supplier_fbr_name || "").trim();
+    const showFbr = fbr && D.norm(fbr) !== D.norm(n.supplier_name || "");
+
     const rows = items.map((it, i) =>
       "<tr>" +
       '<td class="c">' + (i + 1) + "</td>" +
-      "<td>" + D.esc(it.invoice_no || "") + "</td>" +
-      '<td class="c">' + D.dmy(it.invoice_date) + "</td>" +
-      "<td>" + D.esc(it.product || "") + "</td>" +
-      '<td class="c">' + D.esc(it.hs_code || "") + "</td>" +
-      '<td class="c">' + D.esc(it.uom || "") + "</td>" +
-      '<td class="r">' + D.qty(it.quantity) + "</td>" +
-      '<td class="r">' + D.money(it.value_excl) + "</td>" +
-      '<td class="c">' + D.num(it.tax_rate) + "%</td>" +
-      '<td class="r">' + D.money(it.sales_tax) + "</td>" +
-      '<td class="r">' + D.money(it.total) + "</td></tr>").join("");
+      '<td class="c wrap">' + D.esc(it.invoice_no || "") + "</td>" +
+      '<td class="c">' + D.dmyNum(it.invoice_date) + "</td>" +
+      '<td class="c">' + D.esc(it.product || "") + "</td>" +
+      '<td class="r">' + D.money(it.quantity) + "</td>" +
+      '<td class="r">' + D.moneySmart(it.value_excl) + "</td>" +
+      '<td class="r">' + D.moneySmart(it.sales_tax) + "</td>" +
+      '<td class="r">' + D.moneySmart(D.num(it.value_excl) + D.num(it.sales_tax)) + "</td></tr>").join("");
+
+    /* keep the sheet a full page tall, as the printed stationery is */
+    const filler = items.length < 12
+      ? Array(12 - items.length).fill('<tr class="blank"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")
+      : "";
 
     return '<div class="dn-sheet">' +
-      '<div class="co"><h2>' + D.esc(CO.name) + "</h2>" +
-      "<div>" + D.esc(CO.address) + "</div>" +
-      "<div>Phone: " + D.esc(CO.phone) + " &nbsp;|&nbsp; STRN: " + D.esc(CO.strn) + " &nbsp;|&nbsp; NTN: " + D.esc(CO.ntn) + "</div></div>" +
+      '<div class="co">' +
+      "<h2>" + D.esc(CO.name) + "</h2>" +
+      "<div>Address: " + D.esc(CO.address) + "</div>" +
+      "<div>Phone: " + D.esc(CO.phone) + "</div>" +
+      "<div>STRN: " + D.esc(CO.strn) + "</div>" +
+      "<div>NTN:" + D.esc(CO.ntn) + "</div>" +
       '<div class="title">' + D.esc(CO.title) + "</div>" +
-      '<div class="copy">(' + D.esc(copyLabel || CO.copies[0]) + ")</div>" +
+      "</div>" +
 
-      '<table class="meta"><tr>' +
-      '<td style="width:62%"><b>Supplier:</b> ' + D.esc(n.supplier_name || "") + "<br>" +
-      (n.supplier_city ? D.esc(n.supplier_city) + "<br>" : "") +
-      "<b>NTN / CNIC:</b> " + D.esc(n.supplier_ntn || "") + "</td>" +
-      '<td style="width:38%"><b>Debit Note No:</b> ' + D.esc(n.dn_no || "") + "<br>" +
-      "<b>Date:</b> " + D.dmy(n.dn_date) + "<br>" +
-      (n.gate_pass_no ? "<b>Gate Pass No:</b> " + D.esc(n.gate_pass_no) + "<br>" : "") +
-      (n.gate_pass_date ? "<b>Gate Pass Date:</b> " + D.dmy(n.gate_pass_date) : "") +
-      "</td></tr></table>" +
+      '<table class="head"><tr>' +
+      '<td class="party">' +
+      '<div class="ph">Supplier&rsquo;s Particulars</div>' +
+      '<table class="kv">' +
+      "<tr><td>Name:</td><td><b>" + D.esc(n.supplier_name || "") + "</b></td></tr>" +
+      (showFbr ? "<tr><td>FBR Record:</td><td>" + D.esc(fbr) + "</td></tr>" : "") +
+      "<tr><td>Address:</td><td>" + D.esc(n.supplier_city || "") + "</td></tr>" +
+      "<tr><td>NTN:</td><td><b>" + D.esc(n.supplier_ntn || "") + "</b></td></tr>" +
+      "</table></td>" +
+      '<td class="copies">' +
+      '<table class="cp"><tr>' + CO.copies.map(c =>
+        "<td" + (copyLabel && copyLabel === c ? ' class="on"' : "") + ">" + D.esc(c) + "</td>").join("") + "</tr></table>" +
+      '<table class="note-no">' +
+      "<tr><td>Note No:</td><td><b>" + D.esc(n.dn_no || "") + "</b></td></tr>" +
+      "<tr><td>Date:</td><td><b>" + D.dmyNum(n.dn_date) + "</b></td></tr>" +
+      "</table></td></tr></table>" +
 
-      '<table class="it"><thead><tr>' +
-      "<th>Sr</th><th>Invoice No.</th><th>Inv. Date</th><th>Description</th><th>HS Code</th><th>UOM</th>" +
-      "<th>Qty</th><th>Value Excl. S.Tax</th><th>Rate</th><th>Sales Tax</th><th>Total</th>" +
-      "</tr></thead><tbody>" + rows +
-      '<tr><td colspan="7" class="r"><b>Total</b></td>' +
-      '<td class="r"><b>' + D.money(val) + '</b></td><td></td><td class="r"><b>' + D.money(tax) +
-      '</b></td><td class="r"><b>' + D.money(tot) + "</b></td></tr></tbody></table>" +
-      '<div class="words"><b>Amount in words:</b> ' + D.esc(D.words(tot)) + "</div>" +
-      '<div class="rsn"><b>Reason:</b> ' + D.esc(reason) + (n.remarks ? " &nbsp;|&nbsp; <b>Remarks:</b> " + D.esc(n.remarks) : "") + "</div>" +
-      '<div class="sig"><div>Prepared By</div><div>Checked By</div><div>Authorised Signatory</div></div>' +
-      "</div>";
+      '<table class="it"><thead>' +
+      "<tr>" +
+      '<th rowspan="2" class="w-sr">Sr.<br>No</th>' +
+      '<th rowspan="2" class="w-inv">Original Sales<br>Tax Invoice No.</th>' +
+      '<th rowspan="2" class="w-dt">Date per<br>Original Sales<br>Tax Invoice</th>' +
+      '<th rowspan="2">Description</th>' +
+      '<th rowspan="2" class="w-qty">QTY</th>' +
+      '<th colspan="3" class="grp">Debit Adjustment</th></tr>' +
+      "<tr>" +
+      '<th class="w-amt">Value exclusive<br>of ST</th>' +
+      '<th class="w-amt">Value of ST</th>' +
+      '<th class="w-amt">Value inclusive<br>of ST</th></tr></thead><tbody>' +
+      rows + filler +
+      '<tr class="tot"><td class="c">Total</td><td></td><td></td><td></td><td></td>' +
+      '<td class="r">' + D.moneySmart(val) + "</td>" +
+      '<td class="r">' + D.moneySmart(tax) + "</td>" +
+      '<td class="r">' + D.moneySmart(tot) + "</td></tr>" +
+      "</tbody></table>" +
+
+      '<div class="words"><b>Amount in Word:</b> &nbsp;' + D.esc(D.words(tot)) + "</div>" +
+
+      '<table class="foot"><tr>' +
+      "<td>" +
+      '<div class="prep">Prepared By</div>' +
+      '<div class="nt">Note: ' + D.esc(CO.note) + "</div>" +
+      '<div class="nt"><b>Reason for Issuance of Debit Note:</b> ' + D.esc(reasonLine) + "</div>" +
+      (n.remarks ? '<div class="nt">' + D.esc(n.remarks) + "</div>" : "") +
+      "</td>" +
+      '<td class="sign"><div>Authorised Signature:</div><div class="for"><b>' + D.esc(CO.footer) + "</b></div></td>" +
+      "</tr></table></div>";
   };
 
   D.printNotes = function (notes) {

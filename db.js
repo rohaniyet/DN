@@ -85,6 +85,57 @@
     return out;
   };
 
+  /* what an invoice originally carried, and what is already debited off it */
+  D.invoiceInfo = async function (base) {
+    if (!base) return null;
+    const [sum, deb] = await Promise.all([
+      sb.from("v_invoice_summary").select("*").eq("invoice_base", base).limit(1),
+      sb.from("v_invoice_debited").select("*").eq("invoice_base", base).limit(1)
+    ]);
+    if (sum.error) throw sum.error;
+    if (deb.error) throw deb.error;
+    const s = (sum.data || [])[0];
+    if (!s) return null;
+    const d = (deb.data || [])[0] || { debited_qty: 0, debited_value: 0, note_count: 0 };
+    return {
+      base: base, invoice_no: s.first_invoice_no, invoice_date: s.invoice_date,
+      supplier_name: s.supplier_name, supplier_ntn: s.supplier_ntn,
+      uom: s.uom, hs_code: s.hs_code, product: s.product, tax_rate: s.tax_rate, parts: s.parts,
+      total_qty: D.num(s.total_qty), total_value: D.num(s.total_value), total_tax: D.num(s.total_tax),
+      debited_qty: D.num(d.debited_qty), debited_value: D.num(d.debited_value),
+      note_count: d.note_count || 0,
+      rate: D.num(s.total_qty) ? D.round4(D.num(s.total_value) / D.num(s.total_qty)) : 0
+    };
+  };
+
+  /* the supplier register learns from what he types on a debit note */
+  D.rememberSupplier = async function (note) {
+    const ntn = String(note.supplier_ntn || "").trim();
+    const name = String(note.supplier_name || "").trim();
+    if (!name) return null;
+    const list = await D.getSuppliers();
+    let found = ntn ? list.find(s => D.norm(s.ntn) === D.norm(ntn)) : null;
+    if (!found) found = list.find(s => D.norm(s.name) === D.norm(name) ||
+      (s.fbr_name && D.norm(s.fbr_name) === D.norm(name)));
+    const city = String(note.supplier_city || "").trim();
+    const fbr = String(note.supplier_fbr_name || "").trim();
+    if (found) {
+      const patch = {};
+      if (city && !String(found.city || "").trim()) patch.city = city;
+      if (ntn && !String(found.ntn || "").trim()) patch.ntn = ntn;
+      if (fbr && !String(found.fbr_name || "").trim()) patch.fbr_name = fbr;
+      if (!Object.keys(patch).length) return found;
+      const row = ok(await sb.from("suppliers").update(patch).eq("id", found.id).select())[0];
+      Object.assign(found, row || patch);
+      return found;
+    }
+    const row = ok(await sb.from("suppliers").insert({
+      name: name, ntn: ntn || null, city: city || null, fbr_name: fbr || null
+    }).select())[0];
+    D.cache.suppliers = null;
+    return row;
+  };
+
   /* ---------- debit notes ---------- */
   const NOTE_SELECT = "*, items:debit_note_items(*)";
   D.getNotes = (filters) => all("debit_notes", NOTE_SELECT, q => {

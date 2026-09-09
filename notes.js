@@ -133,11 +133,26 @@
       ? { dn_no: await D.nextDnNo(), dn_date: D.today(), status: "draft", items: [] }
       : await D.getNote(id);
     if (!note) throw new Error("Debit note not found");
+
     const items = (note.items || []).slice().sort((a, b) => (a.sr || 0) - (b.sr || 0));
+    items.forEach(fixRate);
     if (!items.length) items.push(blank());
 
+    /* what THIS note already contributes to each invoice, as last saved */
+    const savedByBase = {};
+    (note.items || []).forEach(it => {
+      const b = it.invoice_base || D.invBase(it.invoice_no);
+      if (b) savedByBase[b] = D.round2((savedByBase[b] || 0) + D.num(it.value_excl));
+    });
+
+    const info = {};        /* invoice_base -> invoice information from the master */
+
+    function fixRate(it) {  /* a rate stored as 0.18 means 18% */
+      const r = D.num(it.tax_rate);
+      if (r > 0 && r <= 1) it.tax_rate = D.round2(r * 100);
+    }
     function blank() {
-      return { invoice_no: "", invoice_date: null, product: "", hs_code: "", uom: "",
+      return { invoice_no: "", invoice_base: "", invoice_date: null, product: "", hs_code: "", uom: "",
         quantity: 0, rate: 0, value_excl: 0, tax_rate: window.DN_CONFIG.DEFAULT_TAX_RATE, sales_tax: 0, total: 0 };
     }
 
@@ -153,49 +168,126 @@
       '<label class="f">Status<select id="dStatus">' + STATUSES.map(s =>
         '<option value="' + s + '"' + (s === note.status ? " selected" : "") + ">" + s + "</option>").join("") + "</select></label>" +
       '<label class="f">Gate Pass No.<input id="dGp" value="' + D.esc(note.gate_pass_no || "") + '"></label>' +
-      "</div><div class=\"grid g4\" style=\"margin-top:12px\">" +
-      '<label class="f">Supplier<input id="dSupp" autocomplete="off" value="' + D.esc(note.supplier_name || "") + '" placeholder="Type to search"></label>' +
+      '</div><div class="grid g4" style="margin-top:12px">' +
+      '<label class="f">Supplier (your name)<input id="dSupp" autocomplete="off" value="' + D.esc(note.supplier_name || "") + '" placeholder="Type to search"></label>' +
       '<label class="f">NTN / CNIC<input id="dNtn" value="' + D.esc(note.supplier_ntn || "") + '"></label>' +
-      '<label class="f">City<input id="dCity" value="' + D.esc(note.supplier_city || "") + '"></label>' +
+      '<label class="f">City / Address<input id="dCity" value="' + D.esc(note.supplier_city || "") + '" placeholder="Saved to the supplier automatically"></label>' +
       '<label class="f">Gate Pass Date<input type="date" id="dGpd" value="' + (note.gate_pass_date || "") + '"></label>' +
-      "</div><div class=\"grid g3\" style=\"margin-top:12px\">" +
+      '</div><div class="grid g3" style="margin-top:12px">' +
+      '<label class="f">Name in FBR purchase data<input id="dFbr" value="' + D.esc(note.supplier_fbr_name || "") + '" readonly></label>' +
       '<label class="f">Reason<select id="dReason"><option value="">— select —</option>' +
       reasons.map(r => '<option value="' + D.esc(r.label) + '"' + (r.label === note.reason ? " selected" : "") + ">" + D.esc(r.label) + "</option>").join("") +
       "</select></label>" +
-      '<label class="f">Reason detail (used when Reason is “Other”)<input id="dReasonNote" value="' + D.esc(note.reason_note || "") + '"></label>' +
+      '<label class="f">Reason detail (used when Reason is &ldquo;Other&rdquo;)<input id="dReasonNote" value="' + D.esc(note.reason_note || "") + '"></label>' +
+      '</div><div class="grid g3" style="margin-top:12px">' +
       '<label class="f">Remarks<input id="dRemarks" value="' + D.esc(note.remarks || "") + '"></label>' +
       "</div></div>" +
 
       '<div class="card"><h2>Items</h2>' +
-      '<div class="sub">Type the invoice number to search the purchase master — picking a row fills the date, product, UOM and HS code. Enter a rate to get the value, or a value to get the rate.</div>' +
+      '<div class="sub">Type the invoice number to search the purchase master. Picking one fills the date, product, UOM and HS code and shows how much of that invoice is still available to debit. ' +
+      "Enter a rate to get the value, or a value to get the rate — both may be left at zero.</div>" +
       '<div class="tbl-wrap" style="max-height:none;overflow:visible"><table class="items"><thead><tr>' +
       '<th style="width:30px">#</th><th style="min-width:180px">Invoice No.</th><th style="width:120px">Inv. date</th>' +
-      '<th style="min-width:150px">Product</th><th style="width:110px">HS Code</th><th style="width:90px">UOM</th>' +
-      '<th style="width:100px">Qty</th><th style="width:110px">Rate</th><th style="width:130px">Value excl.</th>' +
-      '<th style="width:70px">Tax %</th><th style="width:120px">Sales tax</th><th style="width:130px">Total</th><th style="width:36px"></th>' +
+      '<th style="min-width:150px">Description</th><th style="width:105px">HS Code</th><th style="width:85px">UOM</th>' +
+      '<th style="width:95px">Qty</th><th style="width:105px">Rate</th><th style="width:125px">Value excl.</th>' +
+      '<th style="width:65px">Tax %</th><th style="width:115px">Sales tax</th><th style="width:125px">Total</th><th style="width:34px"></th>' +
       '</tr></thead><tbody id="dItems"></tbody>' +
       '<tfoot><tr><th colspan="8" style="text-align:right">Totals</th>' +
       '<th class="num" id="tVal"></th><th></th><th class="num" id="tTax"></th><th class="num" id="tTot"></th><th></th></tr></tfoot>' +
       "</table></div>" +
       '<button class="btn sm" id="dAdd" style="margin-top:10px">+ Add row</button>' +
-      '<div id="dWords" class="sub" style="margin-top:10px"></div></div>';
+      '<div id="dWords" class="sub" style="margin-top:10px"></div>' +
+      '<div id="dWarn"></div></div>';
 
     D.$("#dBack").onclick = () => D.go("notes");
 
-    /* supplier typeahead */
+    /* ----- supplier typeahead ----- */
     D.typeahead(D.$("#dSupp"), D.supplierSearch,
       (s) => {
         D.$("#dSupp").value = s.name;
         D.$("#dNtn").value = s.ntn || "";
         D.$("#dCity").value = s.city || "";
+        if (s.fbr_name) D.$("#dFbr").value = s.fbr_name;
         D.$("#dSupp").dataset.id = s.id;
       },
-      (s) => "<b>" + D.esc(s.name) + "</b><small>" + D.esc(s.ntn || "no NTN") + (s.city ? " · " + D.esc(s.city) : "") + "</small>");
+      (s) => "<b>" + D.esc(s.name) + "</b><small>" + D.esc(s.ntn || "no NTN") +
+        (s.city ? " · " + D.esc(s.city) : " · city missing") +
+        (s.fbr_name && D.norm(s.fbr_name) !== D.norm(s.name) ? " · FBR: " + D.esc(s.fbr_name) : "") + "</small>");
     if (note.supplier_id) D.$("#dSupp").dataset.id = note.supplier_id;
+
+    /* ----- invoice capacity ----- */
+    function currentOnBase(base, exceptIndex) {
+      return D.round2(items.reduce((a, it, i) =>
+        a + ((i === exceptIndex ? 0 : (it.invoice_base === base ? D.num(it.value_excl) : 0))), 0));
+    }
+    function remainingFor(base) {
+      const inf = info[base];
+      if (!inf) return null;
+      const othersDebited = D.round2(D.num(inf.debited_value) - D.num(savedByBase[base] || 0));
+      const thisNote = currentOnBase(base, -1);
+      return {
+        inf: inf, othersDebited: othersDebited, thisNote: thisNote,
+        left: D.round2(inf.total_value - othersDebited - thisNote)
+      };
+    }
+
+    async function loadInfo(base) {
+      if (!base || info[base] !== undefined) return;
+      info[base] = null;                       /* mark as being fetched */
+      try { info[base] = await D.invoiceInfo(base); } catch (e) { info[base] = null; }
+      paintInfoRows();
+      checkOver();
+    }
+
+    function infoInner(i) {
+      const it = items[i];
+      const base = it.invoice_base;
+      if (!base) return "";
+      const inf = info[base];
+      if (inf === undefined) return '<div class="inv-info">Looking up the invoice…</div>';
+      if (!inf) return '<div class="inv-info"><b>Not in the purchase master.</b> ' +
+        "The note can still be saved — it stays pending until that month&rsquo;s Annex-A is imported.</div>";
+      const r = remainingFor(base);
+      const over = r.left < -0.01;
+      return '<div class="inv-info"><div class="cols">' +
+        "<div>Invoice <b>" + D.esc(inf.invoice_no) + "</b>" + (inf.parts > 1 ? " (" + inf.parts + " parts)" : "") + "</div>" +
+        "<div>Qty <b>" + D.qty(inf.total_qty) + "</b> " + D.esc(inf.uom || "") + "</div>" +
+        "<div>Rate <b>" + D.moneySmart(inf.rate) + "</b></div>" +
+        "<div>Value <b>" + D.money(inf.total_value) + "</b></div>" +
+        "<div>Sales tax <b>" + D.money(inf.total_tax) + "</b></div>" +
+        '</div><div class="cols" style="margin-top:3px">' +
+        "<div>Already debited <b>" + D.money(r.othersDebited) + "</b>" +
+        (inf.note_count ? " (" + inf.note_count + " note" + (inf.note_count > 1 ? "s" : "") + ")" : "") + "</div>" +
+        "<div>This note <b>" + D.money(r.thisNote) + "</b></div>" +
+        '<div class="' + (over ? "over" : "") + '">Still available <b>' + D.money(r.left) + "</b>" +
+        (over ? " — over the invoice value" : "") + "</div>" +
+        "</div></div>";
+    }
+
+    function paintInfoRows() {
+      D.$$("#dItems tr.info", view).forEach(tr => {
+        const cell = tr.firstElementChild;
+        if (cell) cell.innerHTML = infoInner(+tr.dataset.for);
+      });
+    }
+
+    function checkOver() {
+      const bad = [];
+      const bases = Array.from(new Set(items.map(i => i.invoice_base).filter(Boolean)));
+      bases.forEach(b => {
+        const r = remainingFor(b);
+        if (r && r.left < -0.01) bad.push({ base: b, inv: (info[b] || {}).invoice_no || b, over: -r.left });
+      });
+      D.$("#dWarn").innerHTML = bad.length
+        ? '<div class="msg err" style="margin-top:10px">Debit note exceeds the invoice: ' +
+          bad.map(x => D.esc(x.inv) + " by " + D.money(x.over)).join("; ") + ". Reduce the value before saving.</div>"
+        : "";
+      return bad;
+    }
 
     /* ----- items grid ----- */
     function rowHtml(it, i) {
-      return "<tr data-i=\"" + i + '"><td class="num">' + (i + 1) + "</td>" +
+      return '<tr data-i="' + i + '"><td class="num">' + (i + 1) + "</td>" +
         '<td><input data-f="invoice_no" autocomplete="off" value="' + D.esc(it.invoice_no || "") + '"></td>' +
         '<td><input type="date" data-f="invoice_date" value="' + (it.invoice_date || "") + '"></td>' +
         '<td><input data-f="product" value="' + D.esc(it.product || "") + '"></td>' +
@@ -207,11 +299,14 @@
         '<td><input class="num" data-f="tax_rate" value="' + (D.num(it.tax_rate) || 0) + '"></td>' +
         '<td><input class="num" data-f="sales_tax" value="' + (D.num(it.sales_tax) || "") + '"></td>' +
         '<td class="num" data-total>' + D.money(it.total) + "</td>" +
-        '<td><button class="btn sm danger" data-rm="' + i + '">×</button></td></tr>';
+        '<td><button class="btn sm danger" data-rm="' + i + '">&times;</button></td></tr>' +
+        '<tr class="info" data-for="' + i + '"><td colspan="13" style="border:none;padding:0 6px 6px">' +
+        infoInner(i) + "</td></tr>";
     }
 
     function recalc(i, changed) {
       const it = items[i];
+      fixRate(it);
       if (changed === "quantity" || changed === "rate") it.value_excl = D.round2(D.num(it.quantity) * D.num(it.rate));
       else if (changed === "value_excl" && D.num(it.quantity)) it.rate = D.round4(D.num(it.value_excl) / D.num(it.quantity));
       if (changed !== "sales_tax") it.sales_tax = D.round2(D.num(it.value_excl) * D.num(it.tax_rate) / 100);
@@ -229,46 +324,67 @@
 
     function paintItems() {
       D.$("#dItems").innerHTML = items.map(rowHtml).join("");
-      D.$$("#dItems tr").forEach(tr => {
+      D.$$("#dItems tr[data-i]").forEach(tr => {
         const i = +tr.dataset.i;
         D.$$("input", tr).forEach(inp => {
           inp.oninput = () => {
             const f = inp.dataset.f;
             items[i][f] = (f === "invoice_date") ? (inp.value || null)
               : ["quantity", "rate", "value_excl", "tax_rate", "sales_tax"].includes(f) ? D.num(inp.value) : inp.value;
-            if (f === "invoice_no") items[i].invoice_base = D.invBase(inp.value);
+            if (f === "invoice_no") { items[i].invoice_base = D.invBase(inp.value); loadInfo(items[i].invoice_base); }
             recalc(i, f);
             const tr2 = D.$('#dItems tr[data-i="' + i + '"]');
             D.$("[data-f=value_excl]", tr2).value = D.num(items[i].value_excl) || "";
             D.$("[data-f=rate]", tr2).value = D.num(items[i].rate) || "";
             D.$("[data-f=sales_tax]", tr2).value = D.num(items[i].sales_tax) || "";
+            D.$("[data-f=tax_rate]", tr2).value = D.num(items[i].tax_rate) || 0;
             D.$("[data-total]", tr2).textContent = D.money(items[i].total);
-            totals();
+            totals(); paintInfoRows(); checkOver();
           };
         });
         /* invoice typeahead against the purchase master */
         D.typeahead(D.$("[data-f=invoice_no]", tr), D.searchMaster,
-          (m) => {
+          async (m) => {
             const it = items[i];
             it.invoice_no = m.invoice_no; it.invoice_base = m.invoice_base;
             it.invoice_date = m.invoice_date; it.uom = m.uom || it.uom;
             it.product = m.product || it.product; it.hs_code = m.hs_code || it.hs_code;
-            if (!D.num(it.quantity) && !D.num(it.value_excl)) { /* leave blank - he types the debited part */ }
-            paintItems(); totals();
-            if (!D.$("#dSupp").value && m.supplier_name) {
-              D.$("#dSupp").value = m.supplier_name;
-              D.$("#dNtn").value = m.supplier_ntn || "";
-            }
+            const rate = parseFloat(String(m.tax_rate || "").replace(/[^0-9.]/g, ""));
+            if (!isNaN(rate) && rate > 0) it.tax_rate = rate <= 1 ? D.round2(rate * 100) : rate;
+            recalc(i, "tax_rate");
+            await applyMasterSupplier(m);
+            await loadInfo(it.invoice_base);
+            paintItems(); totals(); checkOver();
           },
-          (m) => "<b>" + D.esc(m.invoice_no) + "</b><small>" + D.dmy(m.invoice_date) + " · " +
+          (m) => "<b>" + D.esc(m.invoice_no) + "</b><small>" + D.dmyNum(m.invoice_date) + " · " +
             D.esc(m.supplier_name || "") + " · available " + D.money(m.avail_value) + "</small>");
-        D.$("[data-rm=\"" + i + '"]', tr).onclick = () => {
-          items.splice(i, 1); if (!items.length) items.push(blank()); paintItems(); totals();
+        D.$('[data-rm="' + i + '"]', tr).onclick = () => {
+          items.splice(i, 1); if (!items.length) items.push(blank());
+          paintItems(); totals(); checkOver();
         };
       });
       totals();
     }
+
+    /* the FBR name always comes from the invoice; his own name wins when we know it */
+    async function applyMasterSupplier(m) {
+      D.$("#dFbr").value = m.supplier_name || "";
+      const list = await D.suppliers();
+      const own = list.find(s => (m.supplier_ntn && D.norm(s.ntn) === D.norm(m.supplier_ntn)) ||
+        (s.fbr_name && D.norm(s.fbr_name) === D.norm(m.supplier_name)));
+      if (own) {
+        if (!D.$("#dSupp").value) D.$("#dSupp").value = own.name;
+        if (!D.$("#dNtn").value) D.$("#dNtn").value = own.ntn || m.supplier_ntn || "";
+        if (!D.$("#dCity").value) D.$("#dCity").value = own.city || "";
+        D.$("#dSupp").dataset.id = own.id;
+      } else {
+        if (!D.$("#dSupp").value) D.$("#dSupp").value = m.supplier_name || "";
+        if (!D.$("#dNtn").value) D.$("#dNtn").value = m.supplier_ntn || "";
+      }
+    }
+
     paintItems();
+    Array.from(new Set(items.map(i => i.invoice_base).filter(Boolean))).forEach(loadInfo);
     D.$("#dAdd").onclick = () => { items.push(blank()); paintItems(); };
 
     function collect() {
@@ -277,12 +393,13 @@
           id: note.id, dn_no: D.$("#dNo").value.trim(), dn_date: D.$("#dDate").value || D.today(),
           supplier_id: D.$("#dSupp").dataset.id || null,
           supplier_name: D.$("#dSupp").value.trim(), supplier_ntn: D.$("#dNtn").value.trim(),
-          supplier_city: D.$("#dCity").value.trim(), reason: D.$("#dReason").value,
-          reason_note: D.$("#dReasonNote").value.trim(), gate_pass_no: D.$("#dGp").value.trim(),
-          gate_pass_date: D.$("#dGpd").value || null, remarks: D.$("#dRemarks").value.trim(),
+          supplier_city: D.$("#dCity").value.trim(), supplier_fbr_name: D.$("#dFbr").value.trim(),
+          reason: D.$("#dReason").value, reason_note: D.$("#dReasonNote").value.trim(),
+          gate_pass_no: D.$("#dGp").value.trim(), gate_pass_date: D.$("#dGpd").value || null,
+          remarks: D.$("#dRemarks").value.trim(),
           status: D.$("#dStatus").value, filed_period: note.filed_period || null
         },
-        items: items.filter(i => i.invoice_no || D.num(i.value_excl))
+        items: items.filter(i => String(i.invoice_no || "").trim() || D.num(i.value_excl) || String(i.product || "").trim())
       };
     }
 
@@ -291,13 +408,19 @@
       if (!head.dn_no) return D.toast("DN number is required", "err");
       if (!head.supplier_name) return D.toast("Supplier is required", "err");
       if (!rows.length) return D.toast("Add at least one item line", "err");
+      const bad = checkOver();
+      if (bad.length) return D.toast("This debit note is more than the invoice still allows", "err");
+
       const btn = D.$("#dSave"); btn.disabled = true; btn.textContent = "Saving…";
       try {
         const saved = await D.saveNote(head, rows);
+        const supp = await D.rememberSupplier(head).catch(() => null);
+        if (supp && !head.supplier_id) await D.sb.from("debit_notes").update({ supplier_id: supp.id }).eq("id", saved.id);
+        D.cache.suppliers = null;
         D.toast("Debit note " + saved.dn_no + " saved");
         D.go("notes");
       } catch (e) {
-        D.toast(e.message.includes("duplicate") ? "DN number " + head.dn_no + " already exists" : e.message, "err");
+        D.toast(String(e.message).includes("duplicate") ? "DN number " + head.dn_no + " already exists" : e.message, "err");
         btn.disabled = false; btn.textContent = "Save";
       }
     };

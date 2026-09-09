@@ -58,6 +58,11 @@ window.DN = window.DN || {};
     const d = dp === undefined ? 2 : dp;
     return D.num(v).toLocaleString("en-PK", { minimumFractionDigits: d, maximumFractionDigits: d });
   };
+  D.moneySmart = (v) => {
+    const n = D.round2(v);
+    return Number.isInteger(n) ? n.toLocaleString("en-PK")
+      : n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
   D.qty = (v) => {
     const n = D.num(v);
     return Number.isInteger(n) ? n.toLocaleString("en-PK")
@@ -126,16 +131,16 @@ window.DN = window.DN || {};
   D.words = (amount) => {
     let n = Math.floor(Math.abs(D.num(amount)));
     const paisa = Math.round((Math.abs(D.num(amount)) - n) * 100);
-    if (n === 0 && !paisa) return "Rupees Zero Only";
+    if (n === 0 && !paisa) return "Zero Rs";
     const parts = [];
     const units = [[10000000, "Crore"], [100000, "Lac"], [1000, "Thousand"]];
     for (const [v, name] of units) {
       if (n >= v) { parts.push(below1000(Math.floor(n / v)) + " " + name); n %= v; }
     }
     if (n) parts.push(below1000(n));
-    let out = "Rupees " + parts.join(" ").trim();
+    let out = parts.join(" ").trim() + " Rs";
     if (paisa) out += " and " + below1000(paisa) + " Paisa";
-    return out + " Only";
+    return out;
   };
 
   /* ---------- misc ---------- */

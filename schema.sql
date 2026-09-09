@@ -190,3 +190,44 @@ grant usage on schema public to authenticated;
 grant select, insert, update, delete on all tables in schema public to authenticated;
 grant usage, select on all sequences in schema public to authenticated;
 grant select on v_invoice_capacity to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 2026-09-09: supplier naming, invoice capacity at entry time
+-- ---------------------------------------------------------------------
+alter table debit_notes add column if not exists supplier_fbr_name text;
+alter table suppliers   add column if not exists address text;
+
+-- what every invoice (all its FBR parts together) originally carried
+drop view if exists v_invoice_summary;
+create view v_invoice_summary with (security_invoker = true) as
+select m.invoice_base,
+       min(m.invoice_no)    as first_invoice_no,
+       max(m.invoice_date)  as invoice_date,
+       max(m.supplier_name) as supplier_name,
+       max(m.supplier_ntn)  as supplier_ntn,
+       max(m.uom)           as uom,
+       max(m.hs_code)       as hs_code,
+       max(m.product)       as product,
+       max(m.tax_rate)      as tax_rate,
+       count(*)             as parts,
+       sum(m.quantity)      as total_qty,
+       sum(m.value_excl)    as total_value,
+       sum(m.sales_tax)     as total_tax
+from purchase_master m
+where m.invoice_base is not null and m.invoice_base <> ''
+group by m.invoice_base;
+
+-- what has already been debited against it by any live debit note
+drop view if exists v_invoice_debited;
+create view v_invoice_debited with (security_invoker = true) as
+select i.invoice_base,
+       sum(i.quantity)   as debited_qty,
+       sum(i.value_excl) as debited_value,
+       count(distinct i.dn_id) as note_count
+from debit_note_items i
+join debit_notes n on n.id = i.dn_id
+where n.status <> 'cancelled'
+  and i.invoice_base is not null and i.invoice_base <> ''
+group by i.invoice_base;
+
+grant select on v_invoice_summary, v_invoice_debited to authenticated;
