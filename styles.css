@@ -190,8 +190,16 @@ tr.cancelled td{color:#9aa8b3;text-decoration:line-through}
 .dn-sheet .sign{text-align:right;width:62mm;white-space:nowrap}
 .dn-sheet .sign .for{margin-top:3px}
 
+/* A zero page margin is what removes the browser's own date/time header and
+   footer; the sheet supplies its own margin through padding instead. */
+@page{size:A4 portrait;margin:0}
+
 @media print{
+  html,body{margin:0;padding:0;background:#fff}
   body>*{display:none !important}
   .print-area{position:static !important;display:block !important}
-  .dn-sheet{width:auto;page-break-after:always}
+  .dn-sheet{width:auto;max-width:none;padding:9mm 10mm;
+    break-after:auto;page-break-after:auto;break-inside:avoid}
+  /* a page break only BETWEEN sheets, never after the last one */
+  .dn-sheet + .dn-sheet{break-before:page;page-break-before:always}
 }

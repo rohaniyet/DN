@@ -27,8 +27,9 @@
       '<td class="r">' + D.moneySmart(D.num(it.value_excl) + D.num(it.sales_tax)) + "</td></tr>").join("");
 
     /* keep the sheet a full page tall, as the printed stationery is */
-    const filler = items.length < 12
-      ? Array(12 - items.length).fill('<tr class="blank"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")
+    const MIN_ROWS = 18;
+    const filler = items.length < MIN_ROWS
+      ? Array(MIN_ROWS - items.length).fill('<tr class="blank"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join("")
       : "";
 
     return '<div class="dn-sheet">' +
