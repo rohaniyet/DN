@@ -249,21 +249,38 @@ create table if not exists app_profiles (
   created_at timestamptz default now()
 );
 
-/* only these addresses get in; anyone else who signs up lands inactive
-   and can see nothing at all */
+/* the addresses allowed in, and the rights each one gets. Anyone else who
+   signs up lands inactive and can see nothing at all. */
+create table if not exists app_allowlist (
+  email text primary key,
+  role  text not null default 'entry' check (role in ('admin','entry'))
+);
+
+/* the very first account ever created is the owner */
+insert into app_allowlist(email, role)
+select lower(u.email), 'admin' from auth.users u order by u.created_at asc limit 1
+on conflict (email) do update set role = 'admin';
+
+insert into app_allowlist(email, role) values ('dn@sgfl.com', 'entry')
+on conflict (email) do nothing;
+
 create or replace function app_allowed(mail text) returns boolean
-language sql immutable as $$
-  select lower(coalesce(mail,'')) in ('sgft.tax@servis.com', 'dn@sgfl.com')
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_allowlist a where a.email = lower(coalesce(mail,'')))
+$$;
+
+create or replace function app_role_for(mail text) returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce((select a.role from app_allowlist a where a.email = lower(coalesce(mail,''))), 'entry')
 $$;
 
 create or replace function handle_new_auth_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   insert into app_profiles(id, email, role, active)
-  values (new.id, lower(new.email),
-          case when lower(new.email) = 'sgft.tax@servis.com' then 'admin' else 'entry' end,
-          app_allowed(new.email))
-  on conflict (id) do nothing;
+  values (new.id, lower(new.email), app_role_for(new.email), app_allowed(new.email))
+  on conflict (id) do update
+     set email = excluded.email, role = excluded.role, active = excluded.active;
   return new;
 end $$;
 
@@ -271,22 +288,24 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function handle_new_auth_user();
 
-/* seed whoever already exists */
+/* seed and refresh whoever already exists */
 insert into app_profiles(id, email, role, active)
-select u.id, lower(u.email),
-       case when lower(u.email) = 'sgft.tax@servis.com' then 'admin' else 'entry' end,
-       app_allowed(u.email)
+select u.id, lower(u.email), app_role_for(u.email), app_allowed(u.email)
 from auth.users u
 on conflict (id) do nothing;
 
-update app_profiles set role = 'admin', active = true where email = 'sgft.tax@servis.com';
-update app_profiles set role = 'entry', active = true where email = 'dn@sgfl.com';
+update app_profiles p
+set role = app_role_for(p.email), active = app_allowed(p.email);
 
 /* every debit note made so far belongs to the owner */
 update debit_notes
-set created_by = (select id from app_profiles where role = 'admin' limit 1),
-    created_by_email = (select email from app_profiles where role = 'admin' limit 1)
+set created_by = (select id from app_profiles where role = 'admin' order by created_at limit 1),
+    created_by_email = (select email from app_profiles where role = 'admin' order by created_at limit 1)
 where created_by is null;
+
+alter table app_allowlist enable row level security;
+drop policy if exists allow_read on app_allowlist;
+create policy allow_read on app_allowlist for select to authenticated using (is_admin());
 
 create or replace function has_access() returns boolean
 language sql stable security definer set search_path = public as $$
@@ -298,7 +317,7 @@ language sql stable security definer set search_path = public as $$
   select exists (select 1 from app_profiles p where p.id = auth.uid() and p.active and p.role = 'admin')
 $$;
 
-grant execute on function has_access(), is_admin(), app_allowed(text) to authenticated;
+grant execute on function has_access(), is_admin(), app_allowed(text), app_role_for(text) to authenticated;
 
 -- ---------- policies ------------------------------------------------
 alter table app_profiles enable row level security;
@@ -416,4 +435,4 @@ from purchase_master
 group by period;
 
 grant select on v_note_totals, v_note_monthly, v_note_status, v_note_supplier,
-                v_note_reason, v_master_periods, app_profiles to authenticated;
+                v_note_reason, v_master_periods, app_profiles, app_allowlist to authenticated;
