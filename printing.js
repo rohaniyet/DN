@@ -96,6 +96,7 @@
   };
 
   async function sheetToPdf(html) {
+    await D.needLib("html2canvas", "jspdf");
     const holder = D.el("div", { style: "position:fixed;left:-10000px;top:0;background:#fff" });
     holder.innerHTML = html;
     document.body.appendChild(holder);
@@ -119,6 +120,7 @@
       D.download(blob, D.safeName(n.supplier_name) + " - DN " + D.safeName(n.dn_no) + ".pdf");
       return;
     }
+    await D.needLib("jszip");
     const zip = new JSZip();
     for (let i = 0; i < notes.length; i++) {
       const n = notes[i];

@@ -231,3 +231,189 @@ where n.status <> 'cancelled'
 group by i.invoice_base;
 
 grant select on v_invoice_summary, v_invoice_debited to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 2026-09-09b: users and rights, plus summary views for speed
+-- ---------------------------------------------------------------------
+
+alter table debit_notes add column if not exists created_by       uuid;
+alter table debit_notes add column if not exists created_by_email text;
+create index if not exists dn_created_by_ix on debit_notes (created_by);
+
+-- ---------- who may use the app, and with what rights ----------------
+create table if not exists app_profiles (
+  id         uuid primary key references auth.users(id) on delete cascade,
+  email      text,
+  role       text not null default 'entry' check (role in ('admin','entry')),
+  active     boolean not null default false,
+  created_at timestamptz default now()
+);
+
+/* only these addresses get in; anyone else who signs up lands inactive
+   and can see nothing at all */
+create or replace function app_allowed(mail text) returns boolean
+language sql immutable as $$
+  select lower(coalesce(mail,'')) in ('sgft.tax@servis.com', 'dn@sgfl.com')
+$$;
+
+create or replace function handle_new_auth_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into app_profiles(id, email, role, active)
+  values (new.id, lower(new.email),
+          case when lower(new.email) = 'sgft.tax@servis.com' then 'admin' else 'entry' end,
+          app_allowed(new.email))
+  on conflict (id) do nothing;
+  return new;
+end $$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created after insert on auth.users
+  for each row execute function handle_new_auth_user();
+
+/* seed whoever already exists */
+insert into app_profiles(id, email, role, active)
+select u.id, lower(u.email),
+       case when lower(u.email) = 'sgft.tax@servis.com' then 'admin' else 'entry' end,
+       app_allowed(u.email)
+from auth.users u
+on conflict (id) do nothing;
+
+update app_profiles set role = 'admin', active = true where email = 'sgft.tax@servis.com';
+update app_profiles set role = 'entry', active = true where email = 'dn@sgfl.com';
+
+/* every debit note made so far belongs to the owner */
+update debit_notes
+set created_by = (select id from app_profiles where role = 'admin' limit 1),
+    created_by_email = (select email from app_profiles where role = 'admin' limit 1)
+where created_by is null;
+
+create or replace function has_access() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_profiles p where p.id = auth.uid() and p.active)
+$$;
+
+create or replace function is_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from app_profiles p where p.id = auth.uid() and p.active and p.role = 'admin')
+$$;
+
+grant execute on function has_access(), is_admin(), app_allowed(text) to authenticated;
+
+-- ---------- policies ------------------------------------------------
+alter table app_profiles enable row level security;
+drop policy if exists prof_self on app_profiles;
+create policy prof_self on app_profiles for select to authenticated
+  using (id = auth.uid() or is_admin());
+
+do $$
+declare t text;
+begin
+  /* reference data: everyone with access reads, only the owner writes */
+  foreach t in array array['purchase_master','reasons','annexi_runs','annexi_lines','app_settings']
+  loop
+    execute format('drop policy if exists app_all on %I', t);
+    execute format('drop policy if exists %I_read on %I', t, t);
+    execute format('drop policy if exists %I_write on %I', t, t);
+    execute format('create policy %I_read on %I for select to authenticated using (has_access())', t, t);
+    execute format('create policy %I_write on %I for all to authenticated using (is_admin()) with check (is_admin())', t, t);
+  end loop;
+end $$;
+
+/* the supplier register learns from data entry, so both roles may add to it */
+drop policy if exists app_all on suppliers;
+drop policy if exists sup_read on suppliers;
+drop policy if exists sup_add on suppliers;
+drop policy if exists sup_edit on suppliers;
+drop policy if exists sup_del on suppliers;
+create policy sup_read on suppliers for select to authenticated using (has_access());
+create policy sup_add  on suppliers for insert to authenticated with check (has_access());
+create policy sup_edit on suppliers for update to authenticated using (has_access()) with check (has_access());
+create policy sup_del  on suppliers for delete to authenticated using (is_admin());
+
+/* debit notes: everyone reads and prints, entry users edit only their own */
+drop policy if exists app_all   on debit_notes;
+drop policy if exists dn_select on debit_notes;
+drop policy if exists dn_insert on debit_notes;
+drop policy if exists dn_update on debit_notes;
+drop policy if exists dn_delete on debit_notes;
+create policy dn_select on debit_notes for select to authenticated using (has_access());
+create policy dn_insert on debit_notes for insert to authenticated
+  with check (has_access() and created_by = auth.uid());
+create policy dn_update on debit_notes for update to authenticated
+  using (has_access() and (is_admin() or created_by = auth.uid()))
+  with check (has_access() and (is_admin() or created_by = auth.uid()));
+create policy dn_delete on debit_notes for delete to authenticated using (is_admin());
+
+drop policy if exists app_all    on debit_note_items;
+drop policy if exists dni_select on debit_note_items;
+drop policy if exists dni_write  on debit_note_items;
+create policy dni_select on debit_note_items for select to authenticated using (has_access());
+create policy dni_write on debit_note_items for all to authenticated
+  using (exists (select 1 from debit_notes n where n.id = dn_id and (is_admin() or n.created_by = auth.uid())))
+  with check (exists (select 1 from debit_notes n where n.id = dn_id and (is_admin() or n.created_by = auth.uid())));
+
+-- ---------- summary views: the screens read these, not whole tables ---
+drop view if exists v_note_totals;
+create view v_note_totals with (security_invoker = true) as
+select n.id, n.dn_no, n.dn_date, n.supplier_name, n.supplier_ntn, n.supplier_city,
+       n.supplier_fbr_name, n.reason, n.reason_note, n.gate_pass_no, n.status,
+       n.filed_period, n.created_by, n.created_by_email, n.updated_at,
+       coalesce(sum(i.value_excl), 0) as value_excl,
+       coalesce(sum(i.sales_tax), 0)  as sales_tax,
+       count(i.id)                    as item_count,
+       string_agg(distinct i.invoice_no, ', ') as invoices
+from debit_notes n
+left join debit_note_items i on i.dn_id = n.id
+group by n.id;
+
+drop view if exists v_note_monthly;
+create view v_note_monthly with (security_invoker = true) as
+select to_char(n.dn_date, 'YYYY-MM') as period,
+       count(distinct n.id) as notes,
+       coalesce(sum(i.value_excl), 0) as value_excl,
+       coalesce(sum(i.sales_tax), 0)  as sales_tax
+from debit_notes n left join debit_note_items i on i.dn_id = n.id
+where n.status <> 'cancelled'
+group by 1;
+
+drop view if exists v_note_status;
+create view v_note_status with (security_invoker = true) as
+select n.status, to_char(n.dn_date, 'YYYY-MM') as period,
+       count(distinct n.id) as notes,
+       coalesce(sum(i.value_excl), 0) as value_excl,
+       coalesce(sum(i.sales_tax), 0)  as sales_tax
+from debit_notes n left join debit_note_items i on i.dn_id = n.id
+group by 1, 2;
+
+drop view if exists v_note_supplier;
+create view v_note_supplier with (security_invoker = true) as
+select coalesce(nullif(btrim(n.supplier_name), ''), '(no supplier)') as supplier,
+       n.status,
+       count(distinct n.id) as notes,
+       coalesce(sum(i.value_excl), 0) as value_excl,
+       coalesce(sum(i.sales_tax), 0)  as sales_tax
+from debit_notes n left join debit_note_items i on i.dn_id = n.id
+group by 1, 2;
+
+drop view if exists v_note_reason;
+create view v_note_reason with (security_invoker = true) as
+select coalesce(nullif(btrim(n.reason), ''), '(not set)') as reason,
+       count(distinct n.id) as notes,
+       coalesce(sum(i.value_excl), 0) as value_excl,
+       coalesce(sum(i.sales_tax), 0)  as sales_tax
+from debit_notes n left join debit_note_items i on i.dn_id = n.id
+where n.status <> 'cancelled'
+group by 1;
+
+drop view if exists v_master_periods;
+create view v_master_periods with (security_invoker = true) as
+select period,
+       count(*) as rows_count,
+       coalesce(sum(value_excl), 0) as value_excl,
+       coalesce(sum(sales_tax), 0)  as sales_tax
+from purchase_master
+group by period;
+
+grant select on v_note_totals, v_note_monthly, v_note_status, v_note_supplier,
+                v_note_reason, v_master_periods, app_profiles to authenticated;

@@ -211,7 +211,7 @@
       const box = D.$("#aResult");
       try {
         const period = D.$("#aPeriod").value || D.period();
-        const notes = (await D.getNotes()).filter(n => n.status === "draft" || n.status === "printed");
+        const notes = await D.getNotes({ statuses: ["draft", "printed"] });
         if (!notes.length) { box.innerHTML = '<div class="card"><div class="msg ok">Nothing pending — every debit note is already filed.</div></div>'; return; }
         const bases = Array.from(new Set(notes.flatMap(n => (n.items || []).map(i => i.invoice_base || D.invBase(i.invoice_no))).filter(Boolean)));
         const caps = await D.capacityForBases(bases);
@@ -261,7 +261,11 @@
       }).join("") +
       "</tbody></table></div></div>";
 
-    D.$("#aXls").onclick = () => exportExcel(res, period);
+    D.$("#aXls").onclick = async () => {
+      const b = D.$("#aXls"); b.disabled = true; b.textContent = "Preparing…";
+      try { await exportExcel(res, period); } catch (e) { D.toast(e.message, "err"); }
+      b.disabled = false; b.textContent = "Download Excel (2 sheets)";
+    };
 
     D.$("#aCommit").onclick = async () => {
       if (!ready.length) return D.toast("Nothing ready to commit", "warn");
@@ -279,7 +283,8 @@
   }
 
   /* ---------------- Excel export: exactly two sheets ---------------- */
-  function exportExcel(res, period) {
+  async function exportExcel(res, period) {
+    await D.needLib("xlsx");
     const cols = columns();
     const YELLOW = { fill: { fgColor: { rgb: "FFF2CC" } } };
     const GROUP = { font: { bold: true }, alignment: { horizontal: "center" },

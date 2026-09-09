@@ -4,6 +4,35 @@ window.DN = window.DN || {};
   "use strict";
   D.views = D.views || {};   /* every screen registers itself here */
 
+  /* ---------- lazy libraries -------------------------------------
+     Only supabase-js loads with the page. Everything heavy is fetched
+     the first time a screen actually needs it.
+     --------------------------------------------------------------- */
+  const LIBS = {
+    xlsx:        { url: "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js", ready: () => !!window.XLSX },
+    chart:       { url: "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js", ready: () => !!window.Chart },
+    jszip:       { url: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", ready: () => !!window.JSZip },
+    html2canvas: { url: "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js", ready: () => !!window.html2canvas },
+    jspdf:       { url: "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", ready: () => !!window.jspdf }
+  };
+  const pending = {};
+  function loadLib(key) {
+    const lib = LIBS[key];
+    if (!lib) return Promise.reject(new Error("Unknown library " + key));
+    if (lib.ready()) return Promise.resolve();
+    if (pending[key]) return pending[key];
+    pending[key] = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = lib.url;
+      el.async = true;
+      el.onload = () => resolve();
+      el.onerror = () => { delete pending[key]; reject(new Error("Could not load " + key + " - check the connection")); };
+      document.head.appendChild(el);
+    });
+    return pending[key];
+  }
+  D.needLib = function () { return Promise.all(Array.prototype.map.call(arguments, loadLib)); };
+
   /* ---------- dom ---------- */
   D.$  = (s, r) => (r || document).querySelector(s);
   D.$$ = (s, r) => Array.from((r || document).querySelectorAll(s));
@@ -172,7 +201,8 @@ window.DN = window.DN || {};
   };
 
   /* read a sheet file -> {headers, rows}  (rows are objects keyed by header) */
-  D.readSheet = (file) => new Promise((resolve, reject) => {
+  D.readSheet = async (file) => { await D.needLib("xlsx"); return readSheetNow(file); };
+  const readSheetNow = (file) => new Promise((resolve, reject) => {
     const fr = new FileReader();
     fr.onerror = () => reject(new Error("File could not be read"));
     fr.onload = (e) => {

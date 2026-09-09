@@ -24,6 +24,20 @@
   }
   D.all = all;
 
+  /* ---------- who is signed in, and what may they do ---------- */
+  D.me = null;
+  D.isAdmin = () => !!(D.me && D.me.role === "admin");
+  D.canEditNote = (note) => D.isAdmin() ||
+    (D.me && note && note.created_by && note.created_by === D.me.id);
+  D.loadProfile = async function (user) {
+    let row = null;
+    try { row = (ok(await sb.from("app_profiles").select("*").eq("id", user.id).limit(1)))[0]; }
+    catch (e) { row = null; }
+    D.me = row || { id: user.id, email: user.email, role: "entry", active: false };
+    D.me.email = D.me.email || user.email;
+    return D.me;
+  };
+
   /* ---------- settings ---------- */
   D.settings = {};
   D.loadSettings = async function () {
@@ -47,15 +61,14 @@
     const r = await sb.from("purchase_master").select("id", { count: "exact", head: true });
     if (r.error) throw r.error; return r.count || 0;
   };
+  /* one small aggregated row per period instead of the whole table */
   D.masterStats = async () => {
-    const rows = await all("purchase_master", "period,value_excl");
-    const byPeriod = {};
-    rows.forEach(r => {
-      const p = r.period || "unknown";
-      byPeriod[p] = byPeriod[p] || { period: p, rows: 0, value: 0 };
-      byPeriod[p].rows++; byPeriod[p].value += D.num(r.value_excl);
-    });
-    return { total: rows.length, periods: Object.values(byPeriod).sort((a, b) => a.period < b.period ? 1 : -1) };
+    const rows = ok(await sb.from("v_master_periods").select("*"));
+    const periods = rows.map(r => ({
+      period: r.period || "unknown", rows: r.rows_count,
+      value: D.num(r.value_excl), tax: D.num(r.sales_tax)
+    })).sort((a, b) => a.period < b.period ? 1 : -1);
+    return { total: periods.reduce((a, p) => a + p.rows, 0), periods: periods };
   };
   /* upsert on inv_ref_no -> only genuinely new FBR rows get added */
   D.importMaster = async function (records, onProgress) {
@@ -138,13 +151,26 @@
 
   /* ---------- debit notes ---------- */
   const NOTE_SELECT = "*, items:debit_note_items(*)";
+  /* full notes with their lines — only the Annex-I matcher needs this */
   D.getNotes = (filters) => all("debit_notes", NOTE_SELECT, q => {
     let x = q.order("dn_date", { ascending: false }).order("dn_no", { ascending: false });
     if (filters && filters.status) x = x.eq("status", filters.status);
+    if (filters && filters.statuses) x = x.in("status", filters.statuses);
     if (filters && filters.from) x = x.gte("dn_date", filters.from);
     if (filters && filters.to) x = x.lte("dn_date", filters.to);
     return x;
   });
+
+  /* one aggregated row per note — what the register and dashboard read */
+  D.noteTotals = () => all("v_note_totals", "*", q =>
+    q.order("dn_date", { ascending: false }).order("dn_no", { ascending: false }));
+
+  D.latestNotes  = async (n) => ok(await sb.from("v_note_totals").select("*")
+    .order("dn_date", { ascending: false }).order("dn_no", { ascending: false }).limit(n || 12));
+  D.noteMonthly  = async () => ok(await sb.from("v_note_monthly").select("*").order("period"));
+  D.noteStatus   = async () => ok(await sb.from("v_note_status").select("*"));
+  D.noteSupplier = async () => ok(await sb.from("v_note_supplier").select("*"));
+  D.noteReason   = async () => ok(await sb.from("v_note_reason").select("*"));
   D.getNote = async (id) => (ok(await sb.from("debit_notes").select(NOTE_SELECT).eq("id", id).limit(1)))[0];
   D.getNotesByIds = async (ids) => {
     const out = [];
@@ -162,6 +188,7 @@
       ok(await sb.from("debit_note_items").delete().eq("dn_id", head.id));
     } else {
       delete head.id;
+      if (D.me) { head.created_by = D.me.id; head.created_by_email = D.me.email; }
       saved = ok(await sb.from("debit_notes").insert(head).select())[0];
     }
     const rows = items.map((it, i) => Object.assign({}, it, { id: undefined, dn_id: saved.id, sr: i + 1 }));

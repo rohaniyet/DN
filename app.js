@@ -18,8 +18,18 @@
   }
   D.go = (name, arg) => { location.hash = "#/" + name + (arg ? "/" + arg : ""); };
 
+  /* screens an entry-only user may open */
+  const ENTRY_ROUTES = ["dashboard", "notes", "note"];
+  D.mayOpen = (name) => D.isAdmin() || ENTRY_ROUTES.indexOf(name) >= 0;
+
   async function render() {
     const r = currentRoute();
+    if (!D.mayOpen(r.name)) {
+      D.$("#view").innerHTML = '<div class="card"><div class="msg warn">' +
+        "This screen is only for the owner login. Your account can create debit notes, " +
+        "print any of them, and edit the ones you made yourself.</div></div>";
+      return;
+    }
     const fn = D.views[r.name] || D.views.dashboard;
     D.$$("#mainNav a").forEach(a => a.classList.toggle("on", a.dataset.route === r.name));
     const view = D.$("#view");
@@ -43,13 +53,20 @@
   }
 
   async function startApp(session) {
+    await D.loadProfile(session.user);
+    if (!D.me.active) {
+      await D.sb.auth.signOut();
+      return showLogin("This account is not allowed into DN Manager.", "err");
+    }
     D.$("#loginScreen").hidden = true;
     D.$("#appShell").hidden = false;
-    D.$("#whoami").textContent = session.user.email;
-    await D.loadSettings();
-    await D.refreshSuppliers().catch(() => {});
+    D.$("#whoami").textContent = session.user.email + (D.isAdmin() ? "" : " · entry");
+    D.$$("#mainNav a").forEach(a => { a.hidden = !D.mayOpen(a.dataset.route); });
+    await D.loadSettings().catch(() => {});
     if (!location.hash) location.hash = "#/dashboard";
     await render();
+    /* the supplier list is only needed once a form is opened */
+    D.refreshSuppliers().catch(() => {});
   }
 
   async function boot() {

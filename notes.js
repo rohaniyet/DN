@@ -7,13 +7,15 @@
 
   /* ---------------- register ---------------- */
   D.views.notes = async function (view) {
-    const notes = await D.getNotes();
-    const total = (n) => (n.items || []).reduce((a, i) => a + D.num(i.value_excl), 0);
-    const tax = (n) => (n.items || []).reduce((a, i) => a + D.num(i.sales_tax), 0);
+    /* one aggregated row per note - no item lines are pulled here */
+    const notes = await D.noteTotals();
+    const admin = D.isAdmin();
+    const total = (n) => D.num(n.value_excl);
+    const tax = (n) => D.num(n.sales_tax);
 
     view.innerHTML =
       '<div class="page-head"><h1>Debit Notes</h1><div class="spacer"></div>' +
-      '<button class="btn" id="nImport">Import old DN file</button>' +
+      (admin ? '<button class="btn" id="nImport">Import old DN file</button>' : "") +
       '<button class="btn" id="nBulk">Download selected (PDF)</button>' +
       '<button class="btn" id="nXls">Export list</button>' +
       '<button class="btn primary" id="nNew">New debit note</button></div>' +
@@ -29,7 +31,8 @@
       '<div class="card" style="padding:0"><div class="tbl-wrap"><table><thead><tr>' +
       '<th style="width:34px"><input type="checkbox" id="nAll"></th>' +
       "<th>DN No.</th><th>Date</th><th>Supplier</th><th>Invoice(s)</th><th>Reason</th>" +
-      '<th class="num">Value excl.</th><th class="num">Sales tax</th><th class="num">Total</th><th>Status</th><th style="width:210px"></th>' +
+      '<th class="num">Value excl.</th><th class="num">Sales tax</th><th class="num">Total</th>' +
+      "<th>Made by</th><th>Status</th><th style=\"width:210px\"></th>" +
       '</tr></thead><tbody id="nBody"></tbody></table></div></div>';
 
     function filtered() {
@@ -40,8 +43,8 @@
         if (f && n.dn_date < f) return false;
         if (t && n.dn_date > t) return false;
         if (!q) return true;
-        const hay = D.norm(n.dn_no + n.supplier_name + n.reason + n.reason_note + n.gate_pass_no +
-          (n.items || []).map(i => i.invoice_no + i.product).join(""));
+        const hay = D.norm([n.dn_no, n.supplier_name, n.reason, n.reason_note,
+          n.gate_pass_no, n.invoices, n.created_by_email].join(" "));
         return hay.includes(q);
       });
     }
@@ -53,30 +56,43 @@
         D.money(v) + "</b> &nbsp;·&nbsp; sales tax <b>" + D.money(s) +
         "</b> &nbsp;·&nbsp; total <b>" + D.money(v + s) + "</b>";
       D.$("#nBody").innerHTML = rows.length ? rows.map(n => {
-        const invs = D.uniqBy(n.items || [], i => i.invoice_no).map(i => i.invoice_no).filter(Boolean);
+        const invs = n.invoices || "";
+        const mine = D.canEditNote(n);
+        const who = (n.created_by_email || "").split("@")[0];
         return '<tr class="' + (n.status === "cancelled" ? "cancelled" : "") + '">' +
           '<td><input type="checkbox" class="pick" value="' + n.id + '"></td>' +
           "<td><b>" + D.esc(n.dn_no) + "</b></td><td>" + D.dmy(n.dn_date) + "</td>" +
           "<td>" + D.esc(n.supplier_name || "") + "</td>" +
-          '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + D.esc(invs.join(", ")) + '">' + D.esc(invs.join(", ")) + "</td>" +
+          '<td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + D.esc(invs) + '">' + D.esc(invs) + "</td>" +
           "<td>" + D.esc(n.reason === "Other" ? (n.reason_note || "Other") : (n.reason || "")) + "</td>" +
           '<td class="num">' + D.money(total(n)) + '</td><td class="num">' + D.money(tax(n)) + "</td>" +
           '<td class="num"><b>' + D.money(total(n) + tax(n)) + "</b></td>" +
+          '<td style="font-size:12px">' + D.esc(who) + "</td>" +
           "<td>" + tag(n.status) + (n.filed_period ? '<div class="n" style="font-size:11px;color:#516475">' + D.periodLabel(n.filed_period) + "</div>" : "") + "</td>" +
-          '<td><button class="btn sm" data-edit="' + n.id + '">Edit</button> ' +
+          "<td>" +
+          (mine ? '<button class="btn sm" data-edit="' + n.id + '">Edit</button> '
+                : '<button class="btn sm" data-view="' + n.id + '">View</button> ') +
           '<button class="btn sm" data-print="' + n.id + '">Print</button> ' +
           '<button class="btn sm" data-pdf="' + n.id + '">PDF</button> ' +
-          '<button class="btn sm danger" data-cancel="' + n.id + '">' + (n.status === "filed" || n.status === "cancelled" ? "Cancel" : "Delete") + "</button></td></tr>";
-      }).join("") : '<tr><td colspan="11" class="empty">No debit notes match.</td></tr>';
+          (admin ? '<button class="btn sm danger" data-cancel="' + n.id + '">' +
+            (n.status === "filed" || n.status === "cancelled" ? "Cancel" : "Delete") + "</button>" : "") +
+          "</td></tr>";
+      }).join("") : '<tr><td colspan="12" class="empty">No debit notes match.</td></tr>';
 
       D.$$("[data-edit]", view).forEach(b => b.onclick = () => D.go("note", b.dataset.edit));
+      D.$$("[data-view]", view).forEach(b => b.onclick = () => D.go("note", b.dataset.view));
       D.$$("[data-print]", view).forEach(b => b.onclick = async () => {
-        const n = notes.find(x => x.id === b.dataset.print);
-        D.printNotes([n]); await D.setNoteStatus([n.id], n.status === "draft" ? "printed" : n.status);
+        b.disabled = true;
+        try {
+          const n = await D.getNote(b.dataset.print);
+          D.printNotes([n]);
+          if (n.status === "draft" && D.canEditNote(n)) await D.setNoteStatus([n.id], "printed");
+        } catch (e) { D.toast(e.message, "err"); }
+        b.disabled = false;
       });
       D.$$("[data-pdf]", view).forEach(b => b.onclick = async () => {
         b.disabled = true; b.textContent = "…";
-        try { await D.notesToPdf([notes.find(x => x.id === b.dataset.pdf)]); }
+        try { await D.notesToPdf([await D.getNote(b.dataset.pdf)]); }
         catch (e) { D.toast(e.message, "err"); }
         b.disabled = false; b.textContent = "PDF";
       });
@@ -99,29 +115,36 @@
     paint();
 
     D.$("#nNew").onclick = () => D.go("note", "new");
-    D.$("#nImport").onclick = () => importNotes(view);
+    if (D.$("#nImport")) D.$("#nImport").onclick = () => importNotes(view);
 
     D.$("#nBulk").onclick = async () => {
       const ids = D.$$(".pick:checked", view).map(c => c.value);
       if (!ids.length) return D.toast("Tick the debit notes you want first", "warn");
-      const btn = D.$("#nBulk"); btn.disabled = true;
-      try { await D.notesToPdf(notes.filter(n => ids.includes(n.id)), (i, t) => btn.textContent = "Building " + i + " / " + t); }
-      catch (e) { D.toast(e.message, "err"); }
+      const btn = D.$("#nBulk"); btn.disabled = true; btn.textContent = "Loading…";
+      try {
+        const full = await D.getNotesByIds(ids);
+        await D.notesToPdf(full, (i, t) => btn.textContent = "Building " + i + " / " + t);
+      } catch (e) { D.toast(e.message, "err"); }
       btn.disabled = false; btn.textContent = "Download selected (PDF)";
     };
 
-    D.$("#nXls").onclick = () => {
-      const rows = filtered().map(n => ({
-        "DN No": n.dn_no, "DN Date": D.dmy(n.dn_date), "Supplier": n.supplier_name, "NTN": n.supplier_ntn,
-        "City": n.supplier_city, "Reason": n.reason === "Other" ? n.reason_note : n.reason,
-        "Gate Pass No": n.gate_pass_no || "", "Gate Pass Date": D.dmy(n.gate_pass_date),
-        "Invoices": D.uniqBy(n.items || [], i => i.invoice_no).map(i => i.invoice_no).join(", "),
-        "Value excl. tax": D.round2(total(n)), "Sales tax": D.round2(tax(n)),
-        "Total": D.round2(total(n) + tax(n)), "Status": n.status, "Filed in": D.periodLabel(n.filed_period)
-      }));
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Debit Notes");
-      XLSX.writeFile(wb, "Debit Notes " + D.today() + ".xlsx");
+    D.$("#nXls").onclick = async () => {
+      const btn = D.$("#nXls"); btn.disabled = true; btn.textContent = "Preparing…";
+      try {
+        await D.needLib("xlsx");
+        const rows = filtered().map(n => ({
+          "DN No": n.dn_no, "DN Date": D.dmy(n.dn_date), "Supplier": n.supplier_name, "NTN": n.supplier_ntn,
+          "City": n.supplier_city, "Reason": n.reason === "Other" ? n.reason_note : n.reason,
+          "Gate Pass No": n.gate_pass_no || "", "Invoices": n.invoices || "",
+          "Value excl. tax": D.round2(total(n)), "Sales tax": D.round2(tax(n)),
+          "Total": D.round2(total(n) + tax(n)), "Status": n.status,
+          "Filed in": D.periodLabel(n.filed_period), "Made by": n.created_by_email || ""
+        }));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Debit Notes");
+        XLSX.writeFile(wb, "Debit Notes " + D.today() + ".xlsx");
+      } catch (e) { D.toast(e.message, "err"); }
+      btn.disabled = false; btn.textContent = "Export list";
     };
   };
 
@@ -200,6 +223,16 @@
       '<div id="dWarn"></div></div>';
 
     D.$("#dBack").onclick = () => D.go("notes");
+
+    /* an entry user may open any note but only change their own */
+    const readOnly = !isNew && !D.canEditNote(note);
+    if (readOnly) {
+      D.$("#dSave").hidden = true;
+      view.insertBefore(D.el("div", { class: "card" },
+        '<div class="msg warn">This debit note was made by ' +
+        D.esc(note.created_by_email || "another user") +
+        ", so it is open for viewing and printing only.</div>"), view.children[1]);
+    }
 
     /* ----- supplier typeahead ----- */
     D.typeahead(D.$("#dSupp"), D.supplierSearch,
@@ -386,6 +419,11 @@
     paintItems();
     Array.from(new Set(items.map(i => i.invoice_base).filter(Boolean))).forEach(loadInfo);
     D.$("#dAdd").onclick = () => { items.push(blank()); paintItems(); };
+    if (readOnly) {
+      D.$$("#view input, #view select, #view textarea").forEach(el => el.disabled = true);
+      D.$$("#view [data-rm]").forEach(b => b.hidden = true);
+      D.$("#dAdd").hidden = true;
+    }
 
     function collect() {
       return {

@@ -1,14 +1,14 @@
-/* ===== DN Manager - dashboard and analytics ===================== */
+/* ===== DN Manager - dashboard and analytics =====================
+   Every figure here comes from a summary view in the database, so a
+   screen costs a few small rows instead of the whole table.
+   ================================================================ */
 (function (D) {
   "use strict";
   const INK = "#12212b", MUTED = "#516475", GRID = "#e7edf2", BRAND = "#0b6b5b";
 
-  const noteValue = (n) => (n.items || []).reduce((a, i) => a + D.num(i.value_excl), 0);
-  const noteTax   = (n) => (n.items || []).reduce((a, i) => a + D.num(i.sales_tax), 0);
-
   function baseOptions(valueFmt) {
     return {
-      responsive: true, maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false, animation: false,
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -23,6 +23,17 @@
       }
     };
   }
+  function horizontal(valueFmt) {
+    const o = baseOptions(valueFmt);
+    o.indexAxis = "y";
+    o.scales = {
+      x: { grid: { color: GRID, drawTicks: false }, border: { display: false },
+           ticks: { color: MUTED, font: { size: 11 }, callback: (v) => shorten(v) } },
+      y: { grid: { display: false }, border: { color: GRID }, ticks: { color: INK, font: { size: 11 } } }
+    };
+    o.plugins.tooltip.callbacks.label = (c) => valueFmt(c.parsed.x);
+    return o;
+  }
   function shorten(v) {
     const n = Math.abs(v);
     if (n >= 1e7) return (v / 1e7).toFixed(1).replace(/\.0$/, "") + " Cr";
@@ -30,123 +41,122 @@
     if (n >= 1e3) return Math.round(v / 1e3) + "k";
     return String(v);
   }
+  const money = (v) => "Rs. " + D.money(v);
+
+  function bar(canvasId, labels, data, opts) {
+    const el = D.$("#" + canvasId);
+    if (!el) return;
+    new Chart(el, {
+      type: "bar",
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 30 }] },
+      options: opts
+    });
+  }
 
   /* ---------------- dashboard ---------------- */
   D.views.dashboard = async function (view) {
-    const [notes, master] = await Promise.all([D.getNotes(), D.masterStats()]);
-    const live = notes.filter(n => n.status !== "cancelled");
-    const open = live.filter(n => n.status === "draft" || n.status === "printed");
-    const thisPeriod = D.period();
-    const thisMonth = live.filter(n => D.period(n.dn_date) === thisPeriod);
+    const [status, supplier, monthly, master, latest] = await Promise.all([
+      D.noteStatus(), D.noteSupplier(), D.noteMonthly(), D.masterStats(), D.latestNotes(12)
+    ]);
 
-    const filed = live.filter(n => n.status === "filed");
-    const money3 = (set) => {
-      const v = set.reduce((a, n) => a + noteValue(n), 0);
-      const t = set.reduce((a, n) => a + noteTax(n), 0);
-      return '<div class="n">Excl. <b>' + D.money(v, 0) + "</b></div>" +
-             '<div class="n">GST <b>' + D.money(t, 0) + "</b> &nbsp;·&nbsp; Total <b>" + D.money(v + t, 0) + "</b></div>";
-    };
+    const period = D.period();
+    const sum = (rows) => rows.reduce((a, r) => ({
+      notes: a.notes + (r.notes || 0),
+      value: a.value + D.num(r.value_excl),
+      tax: a.tax + D.num(r.sales_tax)
+    }), { notes: 0, value: 0, tax: 0 });
+
+    const live = status.filter(r => r.status !== "cancelled");
+    const thisMonth = sum(live.filter(r => r.period === period));
+    const open = sum(live.filter(r => r.status === "draft" || r.status === "printed"));
+    const filed = sum(live.filter(r => r.status === "filed"));
+
+    const money3 = (t) =>
+      '<div class="n">Excl. <b>' + D.money(t.value, 0) + "</b></div>" +
+      '<div class="n">GST <b>' + D.money(t.tax, 0) + "</b> &nbsp;·&nbsp; Total <b>" + D.money(t.value + t.tax, 0) + "</b></div>";
 
     view.innerHTML =
       '<div class="page-head"><h1>Dashboard</h1><div class="spacer"></div>' +
-      '<button class="btn" id="qMaster">Import purchase master</button>' +
+      (D.isAdmin() ? '<button class="btn" id="qMaster">Import purchase master</button>' : "") +
       '<button class="btn primary" id="qNew">New debit note</button></div>' +
 
       '<div class="grid g4" style="margin-bottom:16px">' +
-      '<div class="stat"><div class="k">This month</div><div class="v">' + thisMonth.length + "</div>" + money3(thisMonth) + "</div>" +
-      '<div class="stat b3"><div class="k">Open (not filed)</div><div class="v">' + open.length + "</div>" + money3(open) + "</div>" +
-      '<div class="stat b4"><div class="k">Filed to date</div><div class="v">' + filed.length + "</div>" + money3(filed) + "</div>" +
+      '<div class="stat"><div class="k">This month</div><div class="v">' + thisMonth.notes + "</div>" + money3(thisMonth) + "</div>" +
+      '<div class="stat b3"><div class="k">Open (not filed)</div><div class="v">' + open.notes + "</div>" + money3(open) + "</div>" +
+      '<div class="stat b4"><div class="k">Filed to date</div><div class="v">' + filed.notes + "</div>" + money3(filed) + "</div>" +
       '<div class="stat b2"><div class="k">Purchase master</div><div class="v">' + master.total.toLocaleString("en-PK") + "</div>" +
       '<div class="n">invoice parts</div><div class="n">' + master.periods.length + " periods loaded</div></div></div>" +
 
       '<div class="grid g2">' +
-      '<div class="card"><h2>Debit note value by month <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2><div style="height:270px"><canvas id="cMonth"></canvas></div></div>' +
-      '<div class="card"><h2>Open notes by supplier <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2><div style="height:270px"><canvas id="cOpen"></canvas></div></div>' +
+      '<div class="card"><h2>Debit note value by month <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2>' +
+      '<div style="height:270px"><canvas id="cMonth"></canvas></div></div>' +
+      '<div class="card"><h2>Open notes by supplier <span style="font-weight:400;color:#516475;font-size:12px">(excl. sales tax)</span></h2>' +
+      '<div style="height:270px"><canvas id="cOpen"></canvas></div></div>' +
       "</div>" +
 
       '<div class="card"><h2>Latest debit notes</h2><div class="tbl-wrap" style="max-height:40vh"><table><thead><tr>' +
       "<th>DN No.</th><th>Date</th><th>Supplier</th><th>Reason</th>" +
       '<th class="num">Excl. tax</th><th class="num">Sales tax</th><th class="num">Total</th><th>Status</th></tr></thead><tbody>' +
-      (live.slice(0, 12).map(n => "<tr><td><b>" + D.esc(n.dn_no) + "</b></td><td>" + D.dmy(n.dn_date) + "</td>" +
+      (latest.map(n => "<tr><td><b>" + D.esc(n.dn_no) + "</b></td><td>" + D.dmy(n.dn_date) + "</td>" +
         "<td>" + D.esc(n.supplier_name || "") + "</td><td>" + D.esc(n.reason || "") + "</td>" +
-        '<td class="num">' + D.money(noteValue(n)) + '</td><td class="num">' + D.money(noteTax(n)) + "</td>" +
-        '<td class="num"><b>' + D.money(noteValue(n) + noteTax(n)) + '</b></td>' +
+        '<td class="num">' + D.money(n.value_excl) + '</td><td class="num">' + D.money(n.sales_tax) + "</td>" +
+        '<td class="num"><b>' + D.money(D.num(n.value_excl) + D.num(n.sales_tax)) + "</b></td>" +
         '<td><span class="tag ' + n.status + '">' + n.status + "</span></td></tr>").join("") ||
         '<tr><td colspan="8" class="empty">No debit notes yet.</td></tr>') +
       "</tbody></table></div></div>";
 
     D.$("#qNew").onclick = () => D.go("note", "new");
-    D.$("#qMaster").onclick = () => D.go("master");
+    if (D.$("#qMaster")) D.$("#qMaster").onclick = () => D.go("master");
 
-    const byMonth = {};
-    live.forEach(n => { const p = D.period(n.dn_date); byMonth[p] = (byMonth[p] || 0) + noteValue(n); });
-    const months = Object.keys(byMonth).sort().slice(-12);
-    new Chart(D.$("#cMonth"), {
-      type: "bar",
-      data: { labels: months.map(D.periodLabel), datasets: [{ data: months.map(m => D.round2(byMonth[m])), backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 34 }] },
-      options: baseOptions(v => "Rs. " + D.money(v))
-    });
+    await D.needLib("chart");
+    const months = monthly.slice().sort((a, b) => a.period < b.period ? -1 : 1).slice(-12);
+    bar("cMonth", months.map(m => D.periodLabel(m.period)),
+      months.map(m => D.round2(m.value_excl)), baseOptions(money));
 
-    const bySupp = {};
-    open.forEach(n => { const s = n.supplier_name || "(no supplier)"; bySupp[s] = (bySupp[s] || 0) + noteValue(n); });
-    const top = Object.entries(bySupp).sort((a, b) => b[1] - a[1]).slice(0, 8);
-    const hOpts = baseOptions(v => "Rs. " + D.money(v));
-    hOpts.indexAxis = "y";
-    hOpts.scales = {
-      x: { grid: { color: GRID, drawTicks: false }, border: { display: false }, ticks: { color: MUTED, font: { size: 11 }, callback: (v) => shorten(v) } },
-      y: { grid: { display: false }, border: { color: GRID }, ticks: { color: INK, font: { size: 11 } } }
-    };
-    new Chart(D.$("#cOpen"), {
-      type: "bar",
-      data: { labels: top.map(t => t[0].length > 26 ? t[0].slice(0, 26) + "…" : t[0]),
-        datasets: [{ data: top.map(t => D.round2(t[1])), backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 22 }] },
-      options: hOpts
-    });
+    const openBySupp = {};
+    supplier.filter(r => r.status === "draft" || r.status === "printed")
+      .forEach(r => { openBySupp[r.supplier] = (openBySupp[r.supplier] || 0) + D.num(r.value_excl); });
+    const top = Object.entries(openBySupp).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    bar("cOpen", top.map(t => t[0].length > 26 ? t[0].slice(0, 26) + "…" : t[0]),
+      top.map(t => D.round2(t[1])), horizontal(money));
   };
 
   /* ---------------- analytics ---------------- */
   D.views.analytics = async function (view) {
-    const notes = (await D.getNotes()).filter(n => n.status !== "cancelled");
-    const master = await D.all("purchase_master", "period,value_excl");
+    const [monthly, supplierRows, reasonRows, master] = await Promise.all([
+      D.noteMonthly(), D.noteSupplier(), D.noteReason(), D.masterStats()
+    ]);
 
-    const periods = Array.from(new Set(notes.map(n => D.period(n.dn_date)))).sort();
     const purchByPeriod = {};
-    master.forEach(m => { if (m.period) purchByPeriod[m.period] = (purchByPeriod[m.period] || 0) + D.num(m.value_excl); });
+    master.periods.forEach(p => { purchByPeriod[p.period] = p.value; });
 
-    const rows = periods.map(p => {
-      const ns = notes.filter(n => D.period(n.dn_date) === p);
-      const v = ns.reduce((a, n) => a + noteValue(n), 0);
-      const purch = purchByPeriod[p] || 0;
-      return { period: p, count: ns.length, value: v, tax: ns.reduce((a, n) => a + noteTax(n), 0),
-        purchases: purch, share: purch ? (v / purch) * 100 : null };
+    const rows = monthly.slice().sort((a, b) => a.period < b.period ? -1 : 1).map(m => {
+      const purch = purchByPeriod[m.period] || 0;
+      const value = D.num(m.value_excl);
+      return { period: m.period, count: m.notes, value: value, tax: D.num(m.sales_tax),
+        purchases: purch, share: purch ? (value / purch) * 100 : null };
     });
 
     const bySupplier = {};
-    notes.forEach(n => {
-      const k = n.supplier_name || "(no supplier)";
-      bySupplier[k] = bySupplier[k] || { name: k, count: 0, value: 0, tax: 0 };
-      bySupplier[k].count++; bySupplier[k].value += noteValue(n); bySupplier[k].tax += noteTax(n);
+    supplierRows.filter(r => r.status !== "cancelled").forEach(r => {
+      const s = bySupplier[r.supplier] = bySupplier[r.supplier] || { name: r.supplier, count: 0, value: 0, tax: 0 };
+      s.count += r.notes; s.value += D.num(r.value_excl); s.tax += D.num(r.sales_tax);
     });
     const suppliers = Object.values(bySupplier).sort((a, b) => b.value - a.value);
+    const reasons = reasonRows.map(r => ({ name: r.reason, count: r.notes, value: D.num(r.value_excl), tax: D.num(r.sales_tax) }))
+      .sort((a, b) => b.value - a.value);
 
-    const byReason = {};
-    notes.forEach(n => {
-      const k = n.reason || "(not set)";
-      byReason[k] = byReason[k] || { name: k, count: 0, value: 0, tax: 0 };
-      byReason[k].count++; byReason[k].value += noteValue(n); byReason[k].tax += noteTax(n);
-    });
-    const reasons = Object.values(byReason).sort((a, b) => b.value - a.value);
-
-    const totalValue = notes.reduce((a, n) => a + noteValue(n), 0);
-    const totalTax = notes.reduce((a, n) => a + noteTax(n), 0);
-    const totalPurch = Object.values(purchByPeriod).reduce((a, b) => a + b, 0);
+    const totalValue = rows.reduce((a, r) => a + r.value, 0);
+    const totalTax = rows.reduce((a, r) => a + r.tax, 0);
+    const totalNotes = rows.reduce((a, r) => a + r.count, 0);
+    const totalPurch = master.periods.reduce((a, p) => a + p.value, 0);
 
     view.innerHTML =
       '<div class="page-head"><h1>Analytics</h1><div class="spacer"></div>' +
       '<button class="btn" id="anXls">Export analytics</button></div>' +
       '<div class="grid g4" style="margin-bottom:16px">' +
-      '<div class="stat"><div class="k">Debit notes</div><div class="v">' + notes.length + "</div>" +
-      '<div class="n">' + periods.length + " months</div></div>" +
+      '<div class="stat"><div class="k">Debit notes</div><div class="v">' + totalNotes + "</div>" +
+      '<div class="n">' + rows.length + " months</div></div>" +
       '<div class="stat b2"><div class="k">Value excl. sales tax</div><div class="v">' + D.money(totalValue, 0) + "</div>" +
       '<div class="n">Total with GST <b>' + D.money(totalValue + totalTax, 0) + "</b></div></div>" +
       '<div class="stat b4"><div class="k">Sales tax reversed</div><div class="v">' + D.money(totalTax, 0) + "</div>" +
@@ -168,7 +178,7 @@
       (rows.slice().reverse().map(r => "<tr><td><b>" + D.periodLabel(r.period) + '</b></td><td class="num">' + r.count + "</td>" +
         '<td class="num">' + D.money(r.value) + '</td><td class="num">' + D.money(r.tax) + "</td>" +
         '<td class="num"><b>' + D.money(r.value + r.tax) + "</b></td>" +
-        '<td class="num">' + (r.purchases ? D.money(r.purchases) : "—") + '</td>' +
+        '<td class="num">' + (r.purchases ? D.money(r.purchases) : "—") + "</td>" +
         '<td class="num">' + (r.share === null ? "—" : r.share.toFixed(2) + "%") + "</td></tr>").join("") ||
         '<tr><td colspan="7" class="empty">No data yet.</td></tr>') +
       "</tbody></table></div></div>" +
@@ -183,13 +193,8 @@
         '<tr><td colspan="7" class="empty">No data yet.</td></tr>') +
       "</tbody></table></div></div>";
 
-    const money = v => "Rs. " + D.money(v);
-    new Chart(D.$("#aMonth"), {
-      type: "bar",
-      data: { labels: rows.map(r => D.periodLabel(r.period)),
-        datasets: [{ data: rows.map(r => D.round2(r.value)), backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 34 }] },
-      options: baseOptions(money)
-    });
+    await D.needLib("chart");
+    bar("aMonth", rows.map(r => D.periodLabel(r.period)), rows.map(r => D.round2(r.value)), baseOptions(money));
     new Chart(D.$("#aCount"), {
       type: "line",
       data: { labels: rows.map(r => D.periodLabel(r.period)),
@@ -197,48 +202,33 @@
           borderWidth: 2, pointRadius: 4, pointHoverRadius: 6, tension: .25, fill: false }] },
       options: baseOptions(v => v + " notes")
     });
-
-    const hOpts = () => {
-      const o = baseOptions(money);
-      o.indexAxis = "y";
-      o.scales = {
-        x: { grid: { color: GRID, drawTicks: false }, border: { display: false }, ticks: { color: MUTED, font: { size: 11 }, callback: (v) => shorten(v) } },
-        y: { grid: { display: false }, border: { color: GRID }, ticks: { color: INK, font: { size: 11 } } }
-      };
-      o.plugins.tooltip.callbacks.label = (c) => money(c.parsed.x);
-      return o;
-    };
     const top = suppliers.slice(0, 10);
-    new Chart(D.$("#aSupp"), {
-      type: "bar",
-      data: { labels: top.map(s => s.name.length > 26 ? s.name.slice(0, 26) + "…" : s.name),
-        datasets: [{ data: top.map(s => D.round2(s.value)), backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 20 }] },
-      options: hOpts()
-    });
-    new Chart(D.$("#aReason"), {
-      type: "bar",
-      data: { labels: reasons.map(r => r.name),
-        datasets: [{ data: reasons.map(r => D.round2(r.value)), backgroundColor: BRAND, borderRadius: 4, maxBarThickness: 20 }] },
-      options: hOpts()
-    });
+    bar("aSupp", top.map(s => s.name.length > 26 ? s.name.slice(0, 26) + "…" : s.name),
+      top.map(s => D.round2(s.value)), horizontal(money));
+    bar("aReason", reasons.map(r => r.name), reasons.map(r => D.round2(r.value)), horizontal(money));
 
-    D.$("#anXls").onclick = () => {
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(r => ({
-        Month: D.periodLabel(r.period), Notes: r.count, "Value excl. tax": D.round2(r.value),
-        "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax),
-        Purchases: D.round2(r.purchases),
-        "DN % of purchases": r.share === null ? "" : D.round2(r.share)
-      }))), "By month");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(suppliers.map((s, i) => ({
-        Rank: i + 1, Supplier: s.name, Notes: s.count, "Value excl. tax": D.round2(s.value),
-        "Sales tax": D.round2(s.tax), "Total with GST": D.round2(s.value + s.tax)
-      }))), "By supplier");
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reasons.map(r => ({
-        Reason: r.name, Notes: r.count, "Value excl. tax": D.round2(r.value),
-        "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax)
-      }))), "By reason");
-      XLSX.writeFile(wb, "DN analytics " + D.today() + ".xlsx");
+    D.$("#anXls").onclick = async () => {
+      const btn = D.$("#anXls"); btn.disabled = true; btn.textContent = "Preparing…";
+      try {
+        await D.needLib("xlsx");
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map(r => ({
+          Month: D.periodLabel(r.period), Notes: r.count, "Value excl. tax": D.round2(r.value),
+          "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax),
+          Purchases: D.round2(r.purchases),
+          "DN % of purchases": r.share === null ? "" : D.round2(r.share)
+        }))), "By month");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(suppliers.map((s, i) => ({
+          Rank: i + 1, Supplier: s.name, Notes: s.count, "Value excl. tax": D.round2(s.value),
+          "Sales tax": D.round2(s.tax), "Total with GST": D.round2(s.value + s.tax)
+        }))), "By supplier");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(reasons.map(r => ({
+          Reason: r.name, Notes: r.count, "Value excl. tax": D.round2(r.value),
+          "Sales tax": D.round2(r.tax), "Total with GST": D.round2(r.value + r.tax)
+        }))), "By reason");
+        XLSX.writeFile(wb, "DN analytics " + D.today() + ".xlsx");
+      } catch (e) { D.toast(e.message, "err"); }
+      btn.disabled = false; btn.textContent = "Export analytics";
     };
   };
 })(window.DN);
